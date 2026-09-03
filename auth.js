@@ -16,7 +16,7 @@
  * sesión activa.
  */
 
-const CLIENT_ID = '1025282620285-vu9nr6i0giiilm8rmusin7vc5tmr6kle.apps.googleusercontent.com'; // <- reemplazar
+const CLIENT_ID = '238471356859-759hjqkkhrltssie2nfql2jiabt3dniq.apps.googleusercontent.com'; // <- reemplazar
 const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets';
 
 let tokenClient = null;
