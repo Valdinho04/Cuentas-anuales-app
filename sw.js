@@ -5,7 +5,7 @@
  * aquí — este archivo solo se encarga de los archivos estáticos.
  */
 
-const CACHE_NAME = 'finanzas-shell-v1';
+const CACHE_NAME = 'finanzas-shell-v2';
 const APP_SHELL = [
   './',
   './index.html',
@@ -43,7 +43,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Estrategia "red primero, caché como respaldo": así cada actualización
+  // que subas a GitHub se ve de inmediato, y solo se usa la copia guardada
+  // cuando de verdad no hay conexión.
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((respuestaRed) => {
+        const clon = respuestaRed.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clon));
+        return respuestaRed;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
