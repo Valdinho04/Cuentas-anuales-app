@@ -41,6 +41,27 @@ const Sync = {
     return registro;
   },
 
+  /** Crea un registro en cualquier tabla que no sea Movimientos (Tarjetas, Categorias, etc). */
+  async crearRegistro(tabla, datos, idPersonalizado) {
+    const id = idPersonalizado || this.uuid();
+    const registro = { id, ...datos };
+    await Db.put(this.storeDe(tabla), registro);
+    await Db.encolarPendiente({ id: this.uuid(), tabla, registro, intentos: 0 });
+    this.intentarProcesarCola();
+    return registro;
+  },
+
+  /** Actualiza un registro que ya existe (ej. marcar una tarjeta como cancelada). */
+  async actualizarRegistro(tabla, registro) {
+    await Db.put(this.storeDe(tabla), registro);
+    // Para Sheets no hay "editar fila" simple vía append; por ahora se
+    // vuelve a escribir como fila nueva marcada, y la próxima sincronización
+    // completa (sincronizarDesdeCero) deja la hoja consistente. Ver nota
+    // en README sobre mejoras futuras de edición in-place.
+    await Db.encolarPendiente({ id: this.uuid(), tabla, registro, intentos: 0, esActualizacion: true });
+    this.intentarProcesarCola();
+  },
+
   async intentarProcesarCola() {
     if (this.procesando) return;
     if (!navigator.onLine) { this.setEstado('sin-conexion'); return; }
@@ -54,13 +75,18 @@ const Sync = {
 
       for (const item of pendientes) {
         try {
-          await SheetsApi.agregarFila(spreadsheetId, item.tabla, item.registro);
-          await Db.marcarSincronizado(item.id);
-          const guardado = await this.buscarEnCache(item.tabla, item.registro.id);
-          if (guardado) {
-            guardado.estado_sync = 'sincronizado';
-            await Db.put(this.storeDe(item.tabla), guardado);
+          if (item.esActualizacion) {
+            const todos = await Db.getAll(this.storeDe(item.tabla));
+            await SheetsApi.reescribirTabla(spreadsheetId, item.tabla, todos);
+          } else {
+            await SheetsApi.agregarFila(spreadsheetId, item.tabla, item.registro);
+            const guardado = await this.buscarEnCache(item.tabla, item.registro.id);
+            if (guardado) {
+              guardado.estado_sync = 'sincronizado';
+              await Db.put(this.storeDe(item.tabla), guardado);
+            }
           }
+          await Db.marcarSincronizado(item.id);
         } catch (err) {
           // Backoff simple: incrementa el contador y deja el item en la cola
           // para el próximo intento (evento 'online' o siguiente sync).

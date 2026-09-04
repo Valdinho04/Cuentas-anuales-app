@@ -85,6 +85,11 @@ function renderVista() {
 
   if (state.vista === 'ajustes') {
     document.getElementById('btn-exportar')?.addEventListener('click', exportarExcel);
+    document.getElementById('btn-agregar-tarjeta')?.addEventListener('click', agregarTarjeta);
+    document.getElementById('btn-agregar-categoria')?.addEventListener('click', agregarCategoria);
+    document.querySelectorAll('[data-toggle-tarjeta]').forEach((btn) => {
+      btn.addEventListener('click', () => alternarEstatusTarjeta(btn.dataset.toggleTarjeta));
+    });
   }
 }
 
@@ -175,7 +180,44 @@ function renderApartados() {
 
 // ---------- Vista: Ajustes ----------
 function renderAjustes() {
+  const filasTarjetas = state.tarjetas.map((t) => `
+    <div class="tarjeta-row" style="align-items:center;">
+      <span>${escapeHtml(t.nombre)} ${t.estatus === 'cancelada' ? '(cancelada)' : ''}</span>
+      <button class="btn-text" style="width:auto;padding:4px 10px;" data-toggle-tarjeta="${escapeHtml(t.nombre)}">
+        ${t.estatus === 'cancelada' ? 'Reactivar' : 'Cancelar'}
+      </button>
+    </div>
+  `).join('') || '<p class="ledger-meta">Aún no agregas ninguna tarjeta.</p>';
+
+  const filasCategorias = state.categorias.map((c) => `
+    <div class="tarjeta-row"><span>${escapeHtml(c.nombre)}</span><span>${c.tipo === 'ingreso' ? 'Ingreso' : 'Gasto'}</span></div>
+  `).join('') || '<p class="ledger-meta">Aún no agregas ninguna categoría.</p>';
+
   return `
+    <div class="section"><p class="section-title">Tarjetas</p></div>
+    <div class="tarjeta-block">
+      ${filasTarjetas}
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <input type="text" id="nt-nombre" placeholder="Ej. Oro BBVA" style="flex:2; background:var(--surface-raised); border:1px solid var(--line); border-radius:8px; padding:10px; color:var(--text);" />
+        <input type="number" id="nt-corte" placeholder="Día corte" style="flex:1; background:var(--surface-raised); border:1px solid var(--line); border-radius:8px; padding:10px; color:var(--text);" />
+        <input type="number" id="nt-pago" placeholder="Día pago" style="flex:1; background:var(--surface-raised); border:1px solid var(--line); border-radius:8px; padding:10px; color:var(--text);" />
+      </div>
+      <button id="btn-agregar-tarjeta" class="btn-primary" style="margin-top:10px;">Agregar tarjeta</button>
+    </div>
+
+    <div class="section"><p class="section-title">Categorías</p></div>
+    <div class="tarjeta-block">
+      ${filasCategorias}
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <input type="text" id="nc-nombre" placeholder="Ej. Gasolina" style="flex:2; background:var(--surface-raised); border:1px solid var(--line); border-radius:8px; padding:10px; color:var(--text);" />
+        <select id="nc-tipo" style="flex:1; background:var(--surface-raised); border:1px solid var(--line); border-radius:8px; padding:10px; color:var(--text);">
+          <option value="gasto">Gasto</option>
+          <option value="ingreso">Ingreso</option>
+        </select>
+      </div>
+      <button id="btn-agregar-categoria" class="btn-primary" style="margin-top:10px;">Agregar categoría</button>
+    </div>
+
     <div class="section">
       <p class="section-title">Datos</p>
     </div>
@@ -184,6 +226,50 @@ function renderAjustes() {
       <button id="btn-logout" class="btn-text" onclick="Auth.signOut(); location.reload();">Cerrar sesión</button>
     </div>
   `;
+}
+
+async function agregarTarjeta() {
+  const nombre = document.getElementById('nt-nombre').value.trim();
+  if (!nombre) return;
+  const diaCorte = document.getElementById('nt-corte').value;
+  const diaPago = document.getElementById('nt-pago').value;
+
+  await Sync.crearRegistro('Tarjetas', {
+    nombre,
+    dia_corte: diaCorte,
+    dia_pago: diaPago,
+    fecha_alta: new Date().toISOString().slice(0, 10),
+    fecha_baja: '',
+    estatus: 'activa',
+  }, nombre); // el nombre es el identificador único, como acordamos
+
+  await cargarEstadoLocal();
+  renderVista();
+}
+
+async function alternarEstatusTarjeta(nombre) {
+  const tarjeta = state.tarjetas.find((t) => t.nombre === nombre);
+  if (!tarjeta) return;
+  if (tarjeta.estatus === 'cancelada') {
+    tarjeta.estatus = 'activa';
+    tarjeta.fecha_baja = '';
+  } else {
+    tarjeta.estatus = 'cancelada';
+    tarjeta.fecha_baja = new Date().toISOString().slice(0, 10);
+  }
+  await Sync.actualizarRegistro('Tarjetas', tarjeta);
+  await cargarEstadoLocal();
+  renderVista();
+}
+
+async function agregarCategoria() {
+  const nombre = document.getElementById('nc-nombre').value.trim();
+  if (!nombre) return;
+  const tipo = document.getElementById('nc-tipo').value;
+
+  await Sync.crearRegistro('Categorias', { nombre, tipo });
+  await cargarEstadoLocal();
+  renderVista();
 }
 
 async function exportarExcel() {

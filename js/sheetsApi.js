@@ -99,6 +99,21 @@ const SheetsApi = {
       body: JSON.stringify({ values: [fila] }),
     });
   },
+
+  /**
+   * Reescribe una tabla completa (encabezado + filas) desde cero.
+   * Útil para tablas pequeñas y de catálogo (Tarjetas, Categorias) donde
+   * "editar" un registro es más simple que buscar la fila exacta a modificar.
+   */
+  async reescribirTabla(spreadsheetId, tabla, registros) {
+    const columnas = ESQUEMA[tabla];
+    await authFetch(`${SHEETS_BASE}/${spreadsheetId}/values/${tabla}:clear`, { method: 'POST', body: JSON.stringify({}) });
+    const filas = [columnas, ...registros.map((r) => columnas.map((c) => r[c] ?? ''))];
+    return authFetch(`${SHEETS_BASE}/${spreadsheetId}/values/${tabla}!A1?valueInputOption=RAW`, {
+      method: 'PUT',
+      body: JSON.stringify({ values: filas }),
+    });
+  },
 };
 
 window.SheetsApi = SheetsApi;
