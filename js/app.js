@@ -6,6 +6,7 @@
 
 const state = {
   vista: 'inicio',
+  tarjetaSeleccionada: null,
   movimientos: [],
   tarjetas: [],
   categorias: [],
@@ -22,7 +23,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.querySelectorAll('nav.tabbar button').forEach((btn) => {
     btn.addEventListener('click', () => cambiarVista(btn.dataset.view));
   });
-  document.getElementById('fab-add').addEventListener('click', abrirSheet);
+  document.getElementById('fab-add').addEventListener('click', () => {
+    abrirSheet(state.vista === 'tarjeta-detalle' ? state.tarjetaSeleccionada : null);
+  });
   document.getElementById('btn-cancelar').addEventListener('click', cerrarSheet);
   document.getElementById('sheet-backdrop').addEventListener('click', cerrarSheet);
   document.getElementById('btn-guardar').addEventListener('click', guardarMovimiento);
@@ -69,9 +72,16 @@ async function cargarEstadoLocal() {
 // ---------- Navegación ----------
 function cambiarVista(vista) {
   state.vista = vista;
+  state.tarjetaSeleccionada = null;
   document.querySelectorAll('nav.tabbar button').forEach((b) => {
     b.classList.toggle('active', b.dataset.view === vista);
   });
+  renderVista();
+}
+
+function abrirDetalleTarjeta(nombre) {
+  state.vista = 'tarjeta-detalle';
+  state.tarjetaSeleccionada = nombre;
   renderVista();
 }
 
@@ -80,8 +90,23 @@ function renderVista() {
   actualizarHero();
   if (state.vista === 'inicio') root.innerHTML = renderInicio();
   else if (state.vista === 'tarjetas') root.innerHTML = renderTarjetas();
+  else if (state.vista === 'tarjeta-detalle') root.innerHTML = renderTarjetaDetalle();
   else if (state.vista === 'apartados') root.innerHTML = renderApartados();
   else if (state.vista === 'ajustes') root.innerHTML = renderAjustes();
+
+  document.querySelectorAll('[data-eliminar-mov]').forEach((btn) => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); eliminarMovimiento(btn.dataset.eliminarMov); });
+  });
+
+  if (state.vista === 'tarjetas') {
+    document.querySelectorAll('[data-abrir-tarjeta]').forEach((el) => {
+      el.addEventListener('click', () => abrirDetalleTarjeta(el.dataset.abrirTarjeta));
+    });
+  }
+
+  if (state.vista === 'tarjeta-detalle') {
+    document.getElementById('btn-volver-tarjetas')?.addEventListener('click', () => cambiarVista('tarjetas'));
+  }
 
   if (state.vista === 'ajustes') {
     document.getElementById('btn-exportar')?.addEventListener('click', exportarExcel);
@@ -91,6 +116,13 @@ function renderVista() {
       btn.addEventListener('click', () => alternarEstatusTarjeta(btn.dataset.toggleTarjeta));
     });
   }
+}
+
+async function eliminarMovimiento(id) {
+  if (!confirm('¿Borrar este movimiento? No se puede deshacer.')) return;
+  await Sync.eliminarRegistro('Movimientos', id);
+  await cargarEstadoLocal();
+  renderVista();
 }
 
 function actualizarHero() {
@@ -119,6 +151,7 @@ function renderInicio() {
       <div class="ledger-amount ${m.tipo === 'ingreso' ? 'ingreso' : 'gasto'} num">
         ${m.tipo === 'ingreso' ? '+' : '−'}${formatoMoneda(Math.abs(Number(m.monto || 0)))}
       </div>
+      <button class="btn-text" style="width:auto;padding:0 0 0 6px;font-size:16px;" data-eliminar-mov="${m.id}" title="Borrar">×</button>
     </div>
   `).join('');
   return `<div class="section"><p class="section-title">Movimientos recientes</p></div><div class="ledger">${filas}</div>`;
@@ -143,19 +176,55 @@ function renderTarjetas() {
     const msiActivos = compras.filter((m) => m.tipo === 'compra_msi' && Number(m.msi_restantes) > 0);
 
     return `
-      <div class="tarjeta-block">
+      <div class="tarjeta-block" style="cursor:pointer;" data-abrir-tarjeta="${escapeHtml(t.nombre)}">
         <p class="tarjeta-nombre">${escapeHtml(t.nombre)}</p>
         <div class="tarjeta-row"><span>Saldo</span><span class="num">${formatoMoneda(saldo)}</span></div>
         <div class="tarjeta-row"><span>MSI activos</span><span class="num">${msiActivos.length}</span></div>
-        ${msiActivos.map((m) => `
-          <div class="msi-item">
-            <span>${escapeHtml(m.descripcion)} — ${formatoMoneda(m.mensualidad)}/${m.num_msi} MSI</span>
-            <span class="num">${m.msi_restantes} restantes</span>
-          </div>
-        `).join('')}
+        <div class="tarjeta-row"><span>Movimientos</span><span class="num">${compras.length}</span></div>
       </div>
     `;
   }).join('');
+}
+
+// ---------- Vista: Detalle de una tarjeta ----------
+function renderTarjetaDetalle() {
+  const nombre = state.tarjetaSeleccionada;
+  const t = state.tarjetas.find((tt) => tt.nombre === nombre);
+  if (!t) return `<div class="empty-state">Esta tarjeta ya no existe.</div>`;
+
+  const movs = state.movimientos.filter((m) => m.tarjeta === nombre);
+  const msi = movs.filter((m) => m.tipo === 'compra_msi').sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
+  const normales = movs.filter((m) => m.tipo === 'compra_normal').sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
+  const pagos = movs.filter((m) => m.tipo === 'pago_tarjeta');
+  const saldo = [...msi, ...normales].reduce((a, m) => a + Number(m.monto || 0), 0) - pagos.reduce((a, m) => a + Number(m.monto || 0), 0);
+
+  const filaCompra = (m) => `
+    <div class="ledger-row">
+      <div class="ledger-main">
+        <p class="ledger-desc">${escapeHtml(m.descripcion || 'Compra')}</p>
+        <p class="ledger-meta">${formatoFecha(m.fecha)} · ${m.categoria || '—'}${m.tipo === 'compra_msi' ? ` · ${m.msi_restantes}/${m.num_msi} MSI restantes` : ''}</p>
+      </div>
+      <div class="ledger-amount gasto num">${formatoMoneda(m.monto)}</div>
+      <button class="btn-text" style="width:auto;padding:0 0 0 6px;font-size:16px;" data-eliminar-mov="${m.id}" title="Borrar">×</button>
+    </div>
+  `;
+
+  return `
+    <div class="section" style="display:flex; align-items:center; gap:10px;">
+      <button id="btn-volver-tarjetas" class="btn-text" style="width:auto;padding:4px 0;">← Tarjetas</button>
+    </div>
+    <div class="tarjeta-block">
+      <p class="tarjeta-nombre">${escapeHtml(nombre)}</p>
+      <div class="tarjeta-row"><span>Saldo</span><span class="num">${formatoMoneda(saldo)}</span></div>
+      <div class="tarjeta-row"><span>Día de corte</span><span class="num">${t.dia_corte || '—'}</span></div>
+      <div class="tarjeta-row"><span>Día de pago</span><span class="num">${t.dia_pago || '—'}</span></div>
+    </div>
+
+    ${msi.length ? `<div class="section"><p class="section-title">Compras a MSI</p></div><div class="ledger">${msi.map(filaCompra).join('')}</div>` : ''}
+
+    <div class="section"><p class="section-title">Compras de contado</p></div>
+    <div class="ledger">${normales.length ? normales.map(filaCompra).join('') : '<div class="empty-state">Sin compras de contado todavía.</div>'}</div>
+  `;
 }
 
 // ---------- Vista: Apartados ----------
@@ -286,8 +355,12 @@ async function exportarExcel() {
 // ---------- Registro rápido (+ botón) ----------
 let tipoSeleccionado = 'gasto';
 
-function abrirSheet() {
+function abrirSheet(tarjetaPreset) {
   poblarSelects();
+  if (tarjetaPreset) {
+    document.getElementById('f-metodo').value = tarjetaPreset;
+    document.getElementById('field-msi').style.display = tipoSeleccionado === 'gasto' ? '' : 'none';
+  }
   document.getElementById('sheet-backdrop').classList.add('open');
   document.getElementById('add-sheet').classList.add('open');
   document.getElementById('f-monto').focus();

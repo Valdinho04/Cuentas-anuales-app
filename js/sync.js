@@ -62,6 +62,13 @@ const Sync = {
     this.intentarProcesarCola();
   },
 
+  /** Elimina un registro y sincroniza el estado completo de esa tabla. */
+  async eliminarRegistro(tabla, id) {
+    await Db.delete(this.storeDe(tabla), id);
+    await Db.encolarPendiente({ id: this.uuid(), tabla, registro: null, intentos: 0, esActualizacion: true });
+    this.intentarProcesarCola();
+  },
+
   async intentarProcesarCola() {
     if (this.procesando) return;
     if (!navigator.onLine) { this.setEstado('sin-conexion'); return; }
