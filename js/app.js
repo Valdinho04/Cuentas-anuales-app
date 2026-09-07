@@ -115,6 +115,16 @@ function renderVista() {
     document.querySelectorAll('[data-toggle-tarjeta]').forEach((btn) => {
       btn.addEventListener('click', () => alternarEstatusTarjeta(btn.dataset.toggleTarjeta));
     });
+    document.querySelectorAll('[data-eliminar-categoria]').forEach((btn) => {
+      btn.addEventListener('click', () => eliminarCategoria(btn.dataset.eliminarCategoria));
+    });
+  }
+
+  if (state.vista === 'apartados') {
+    document.getElementById('btn-agregar-apartado')?.addEventListener('click', agregarApartado);
+    document.querySelectorAll('[data-eliminar-apartado]').forEach((btn) => {
+      btn.addEventListener('click', () => eliminarApartado(btn.dataset.eliminarApartado));
+    });
   }
 }
 
@@ -229,10 +239,7 @@ function renderTarjetaDetalle() {
 
 // ---------- Vista: Apartados ----------
 function renderApartados() {
-  if (!state.apartados.length) {
-    return `<div class="empty-state">No tienes apartados activos todavía.</div>`;
-  }
-  return state.apartados.map((a) => {
+  const lista = state.apartados.map((a) => {
     const acumulado = state.movimientos
       .filter((m) => m.tipo === 'apartado' && m.categoria === a.nombre)
       .reduce((acc, m) => acc + Number(m.monto || 0), 0);
@@ -242,9 +249,48 @@ function renderApartados() {
         <p class="tarjeta-nombre">${escapeHtml(a.nombre)}</p>
         <div class="tarjeta-row"><span>Acumulado</span><span class="num">${formatoMoneda(acumulado)} de ${formatoMoneda(a.monto_meta)}</span></div>
         <div class="tarjeta-row"><span>Avance</span><span class="num">${pct}%</span></div>
+        <button class="btn-text" style="width:auto;padding:6px 0 0;font-size:13px;" data-eliminar-apartado="${a.id}">Eliminar</button>
       </div>
     `;
-  }).join('');
+  }).join('') || '<div class="empty-state">No tienes apartados activos todavía.</div>';
+
+  return `
+    ${lista}
+    <div class="section"><p class="section-title">Nuevo apartado</p></div>
+    <div class="tarjeta-block">
+      <div class="field">
+        <label for="na-nombre">Nombre (ej. "Viaje fin de año")</label>
+        <input type="text" id="na-nombre" />
+      </div>
+      <div class="field">
+        <label for="na-meta">Monto meta</label>
+        <input type="number" id="na-meta" class="num" placeholder="0.00" />
+      </div>
+      <button id="btn-agregar-apartado" class="btn-primary">Crear apartado</button>
+    </div>
+  `;
+}
+
+async function agregarApartado() {
+  const nombre = document.getElementById('na-nombre').value.trim();
+  if (!nombre) return;
+  const montoMeta = Number(document.getElementById('na-meta').value || 0);
+
+  await Sync.crearRegistro('Apartados', {
+    nombre,
+    monto_meta: montoMeta,
+    fecha_meta: '',
+    estatus: 'activo',
+  });
+  await cargarEstadoLocal();
+  renderVista();
+}
+
+async function eliminarApartado(id) {
+  if (!confirm('¿Eliminar este apartado?')) return;
+  await Sync.eliminarRegistro('Apartados', id);
+  await cargarEstadoLocal();
+  renderVista();
 }
 
 // ---------- Vista: Ajustes ----------
@@ -259,7 +305,10 @@ function renderAjustes() {
   `).join('') || '<p class="ledger-meta">Aún no agregas ninguna tarjeta.</p>';
 
   const filasCategorias = state.categorias.map((c) => `
-    <div class="tarjeta-row"><span>${escapeHtml(c.nombre)}</span><span>${c.tipo === 'ingreso' ? 'Ingreso' : 'Gasto'}</span></div>
+    <div class="tarjeta-row" style="align-items:center;">
+      <span>${escapeHtml(c.nombre)} <span style="color:var(--text-muted);">· ${c.tipo === 'ingreso' ? 'Ingreso' : 'Gasto'}</span></span>
+      <button class="btn-text" style="width:auto;padding:4px 10px;font-size:16px;" data-eliminar-categoria="${c.id}" title="Borrar">×</button>
+    </div>
   `).join('') || '<p class="ledger-meta">Aún no agregas ninguna categoría.</p>';
 
   return `
@@ -337,6 +386,13 @@ async function agregarCategoria() {
   const tipo = document.getElementById('nc-tipo').value;
 
   await Sync.crearRegistro('Categorias', { nombre, tipo });
+  await cargarEstadoLocal();
+  renderVista();
+}
+
+async function eliminarCategoria(id) {
+  if (!confirm('¿Borrar esta categoría? Los movimientos que ya la usan conservan el nombre, pero dejará de aparecer como opción.')) return;
+  await Sync.eliminarRegistro('Categorias', id);
   await cargarEstadoLocal();
   renderVista();
 }
