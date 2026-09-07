@@ -21,7 +21,7 @@
   <div id="app" style="display:none; display:flex; flex-direction:column; flex:1;">
 
     <header class="hero">
-      <p class="hero-label">Disponible este mes</p>
+      <p class="hero-label" id="hero-label">Disponible</p>
       <p id="hero-amount" class="hero-amount positive num">$0.00</p>
       <div class="sync-status">
         <span id="sync-dot" class="sync-dot"></span>
@@ -44,9 +44,9 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/></svg>
         Tarjetas
       </button>
-      <button data-view="apartados">
+      <button data-view="cuentas">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v12"/><path d="M6 9l6 6 6-6"/><path d="M4 21h16"/></svg>
-        Apartados
+        Cuentas
       </button>
       <button data-view="ajustes">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-1.8-.3 1.6 1.6 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.6 1.6 0 00-1-1.5 1.6 1.6 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.6 1.6 0 00.3-1.8 1.6 1.6 0 00-1.5-1H3a2 2 0 110-4h.1a1.6 1.6 0 001.5-1 1.6 1.6 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.6 1.6 0 001.8.3H9a1.6 1.6 0 001-1.5V3a2 2 0 114 0v.1a1.6 1.6 0 001 1.5 1.6 1.6 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.6 1.6 0 00-.3 1.8V9a1.6 1.6 0 001.5 1H21a2 2 0 110 4h-.1a1.6 1.6 0 00-1.5 1z"/></svg>
@@ -64,6 +64,7 @@
     <div class="type-toggle" id="type-toggle">
       <button data-type="gasto" class="active">Gasto</button>
       <button data-type="ingreso">Ingreso</button>
+      <button data-type="apartado">Apartado</button>
       <button data-type="pago_tarjeta">Pago tarjeta</button>
     </div>
 
@@ -77,14 +78,24 @@
       <input type="text" id="f-desc" placeholder="¿En qué fue?" />
     </div>
 
-    <div class="field">
+    <div class="field" id="field-categoria">
       <label for="f-categoria">Categoría</label>
       <select id="f-categoria"></select>
     </div>
 
-    <div class="field">
+    <div class="field" id="field-metodo">
       <label for="f-metodo">Pagado con (elige la tarjeta si aplica)</label>
       <select id="f-metodo"></select>
+    </div>
+
+    <div class="field" id="field-cuenta" style="display:none;">
+      <label for="f-cuenta">Cuenta</label>
+      <select id="f-cuenta"></select>
+    </div>
+
+    <div class="field" id="field-apartado" style="display:none;">
+      <label for="f-apartado">Apartado</label>
+      <select id="f-apartado"></select>
     </div>
 
     <div class="field" id="field-msi" style="display:none;">
