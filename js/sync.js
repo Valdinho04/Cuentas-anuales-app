@@ -126,7 +126,7 @@ const Sync = {
     const datos = await SheetsApi.leerTodo(spreadsheetId);
     await Db.putMany('movimientos', datos.Movimientos);
     await Db.putMany('tarjetas', datos.Tarjetas.map((t) => ({ ...t, id: t.nombre })));
-    await Db.putMany('cuentas', datos.Cuentas);
+    await Db.putMany('cuentas', datos.Cuentas.map((c) => ({ ...c, id: c.nombre })));
     await Db.putMany('categorias', datos.Categorias);
     await Db.putMany('ingresos', datos.Ingresos);
     await Db.putMany('apartados', datos.Apartados);

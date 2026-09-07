@@ -11,6 +11,7 @@ const state = {
   tarjetas: [],
   categorias: [],
   apartados: [],
+  cuentas: [],
 };
 
 // ---------- Arranque ----------
@@ -67,6 +68,37 @@ async function cargarEstadoLocal() {
   state.tarjetas = await Db.getAll('tarjetas');
   state.categorias = await Db.getAll('categorias');
   state.apartados = await Db.getAll('apartados');
+  state.cuentas = await Db.getAll('cuentas');
+}
+
+// ---------- Cálculos de saldo de cuentas y apartados ----------
+// Saldo general de una cuenta = ingresos que entraron directo a esa cuenta
+// (sin apartado) menos lo que se ha "apartado" (movido) desde esa cuenta.
+// Nota: por ahora los gastos en efectivo todavía no se restan de ninguna
+// cuenta específica — eso vendrá en un siguiente ajuste.
+function saldoGeneralCuenta(nombreCuenta) {
+  return state.movimientos.reduce((acc, m) => {
+    if (m.cuenta !== nombreCuenta) return acc;
+    if (m.tipo === 'ingreso' && !m.apartado) return acc + Number(m.monto || 0);
+    if (m.tipo === 'apartado') return acc - Number(m.monto || 0);
+    return acc;
+  }, 0);
+}
+
+function saldoApartado(nombreCuenta, nombreApartado) {
+  return state.movimientos.reduce((acc, m) => {
+    if (m.cuenta !== nombreCuenta || m.apartado !== nombreApartado) return acc;
+    if (m.tipo === 'ingreso' || m.tipo === 'apartado') return acc + Number(m.monto || 0);
+    return acc;
+  }, 0);
+}
+
+function saldoTotalApartados() {
+  return state.apartados.reduce((acc, a) => acc + saldoApartado(a.cuenta, a.nombre), 0);
+}
+
+function cuentaPrincipal() {
+  return state.cuentas.find((c) => c.es_principal === true || c.es_principal === 'true');
 }
 
 // ---------- Navegación ----------
@@ -91,7 +123,7 @@ function renderVista() {
   if (state.vista === 'inicio') root.innerHTML = renderInicio();
   else if (state.vista === 'tarjetas') root.innerHTML = renderTarjetas();
   else if (state.vista === 'tarjeta-detalle') root.innerHTML = renderTarjetaDetalle();
-  else if (state.vista === 'apartados') root.innerHTML = renderApartados();
+  else if (state.vista === 'cuentas') root.innerHTML = renderCuentas();
   else if (state.vista === 'ajustes') root.innerHTML = renderAjustes();
 
   document.querySelectorAll('[data-eliminar-mov]').forEach((btn) => {
@@ -120,10 +152,17 @@ function renderVista() {
     });
   }
 
-  if (state.vista === 'apartados') {
+  if (state.vista === 'cuentas') {
+    document.getElementById('btn-agregar-cuenta')?.addEventListener('click', agregarCuenta);
     document.getElementById('btn-agregar-apartado')?.addEventListener('click', agregarApartado);
     document.querySelectorAll('[data-eliminar-apartado]').forEach((btn) => {
       btn.addEventListener('click', () => eliminarApartado(btn.dataset.eliminarApartado));
+    });
+    document.querySelectorAll('[data-eliminar-cuenta]').forEach((btn) => {
+      btn.addEventListener('click', () => eliminarCuenta(btn.dataset.eliminarCuenta));
+    });
+    document.querySelectorAll('[data-marcar-principal]').forEach((btn) => {
+      btn.addEventListener('click', () => marcarCuentaPrincipal(btn.dataset.marcarPrincipal));
     });
   }
 }
@@ -136,15 +175,25 @@ async function eliminarMovimiento(id) {
 }
 
 function actualizarHero() {
-  const disponible = state.movimientos.reduce((acc, m) => {
-    if (m.tipo === 'ingreso') return acc + Number(m.monto || 0);
-    if (m.tipo === 'gasto' || m.tipo === 'compra_normal' || m.tipo === 'compra_msi') return acc - Number(m.monto || 0);
-    return acc;
-  }, 0);
+  const principal = cuentaPrincipal();
+  let disponible;
+  if (principal) {
+    disponible = saldoGeneralCuenta(principal.nombre);
+  } else {
+    // Mientras no haya una cuenta marcada como principal, usamos el cálculo
+    // anterior (ingresos menos gastos) para no dejar el número en blanco.
+    disponible = state.movimientos.reduce((acc, m) => {
+      if (m.tipo === 'ingreso') return acc + Number(m.monto || 0);
+      if (m.tipo === 'gasto' || m.tipo === 'compra_normal' || m.tipo === 'compra_msi') return acc - Number(m.monto || 0);
+      return acc;
+    }, 0);
+  }
   const el = document.getElementById('hero-amount');
   el.textContent = formatoMoneda(disponible);
   el.classList.toggle('negative', disponible < 0);
   el.classList.toggle('positive', disponible >= 0);
+  const label = document.getElementById('hero-label');
+  if (label) label.textContent = principal ? `Disponible en ${principal.nombre}` : 'Disponible';
 }
 
 // ---------- Vista: Inicio (ledger de movimientos) ----------
@@ -156,10 +205,10 @@ function renderInicio() {
     <div class="ledger-row">
       <div class="ledger-main">
         <p class="ledger-desc">${escapeHtml(m.descripcion || sinDescripcion(m.tipo))}</p>
-        <p class="ledger-meta">${formatoFecha(m.fecha)} · ${m.categoria || '—'}${m.tarjeta ? ' · ' + escapeHtml(m.tarjeta) : ''}</p>
+        <p class="ledger-meta">${formatoFecha(m.fecha)} · ${m.categoria || '—'}${m.tarjeta ? ' · ' + escapeHtml(m.tarjeta) : ''}${m.cuenta ? ' · ' + escapeHtml(m.cuenta) + (m.apartado ? ' → ' + escapeHtml(m.apartado) : '') : ''}</p>
       </div>
-      <div class="ledger-amount ${m.tipo === 'ingreso' ? 'ingreso' : 'gasto'} num">
-        ${m.tipo === 'ingreso' ? '+' : '−'}${formatoMoneda(Math.abs(Number(m.monto || 0)))}
+      <div class="ledger-amount ${(m.tipo === 'ingreso' || m.tipo === 'apartado') ? 'ingreso' : 'gasto'} num">
+        ${(m.tipo === 'ingreso' || m.tipo === 'apartado') ? '+' : '−'}${formatoMoneda(Math.abs(Number(m.monto || 0)))}
       </div>
       <button class="btn-text" style="width:auto;padding:0 0 0 6px;font-size:16px;" data-eliminar-mov="${m.id}" title="Borrar">×</button>
     </div>
@@ -237,47 +286,143 @@ function renderTarjetaDetalle() {
   `;
 }
 
-// ---------- Vista: Apartados ----------
-function renderApartados() {
-  const lista = state.apartados.map((a) => {
-    const acumulado = state.movimientos
-      .filter((m) => m.tipo === 'apartado' && m.categoria === a.nombre)
-      .reduce((acc, m) => acc + Number(m.monto || 0), 0);
-    const pct = a.monto_meta ? Math.min(100, Math.round((acumulado / a.monto_meta) * 100)) : 0;
+// ---------- Vista: Cuentas (bancos) con sus apartados anidados ----------
+function renderCuentas() {
+  const activas = state.cuentas.filter((c) => c.estatus !== 'cancelada');
+  const sinCuenta = state.apartados.filter((a) => !a.cuenta || !activas.some((c) => c.nombre === a.cuenta));
+
+  const bloqueCuenta = (c) => {
+    const esPrincipal = c.es_principal === true || c.es_principal === 'true';
+    const saldoGeneral = saldoGeneralCuenta(c.nombre);
+    const apartadosDeEsta = state.apartados.filter((a) => a.cuenta === c.nombre);
+
+    const filasApartados = apartadosDeEsta.map((a) => {
+      const acumulado = saldoApartado(c.nombre, a.nombre);
+      const pct = a.monto_meta ? Math.min(100, Math.round((acumulado / a.monto_meta) * 100)) : 0;
+      return `
+        <div class="tarjeta-row" style="align-items:center; padding-left:12px; border-left:2px solid var(--line);">
+          <span>${escapeHtml(a.nombre)}<br><span class="ledger-meta">${formatoMoneda(acumulado)}${a.monto_meta ? ` de ${formatoMoneda(a.monto_meta)} · ${pct}%` : ''}</span></span>
+          <button class="btn-text" style="width:auto;padding:4px 8px;font-size:14px;" data-eliminar-apartado="${a.id}" title="Borrar">×</button>
+        </div>
+      `;
+    }).join('') || '<p class="ledger-meta" style="padding-left:12px;">Sin apartados en esta cuenta.</p>';
+
     return `
       <div class="tarjeta-block">
-        <p class="tarjeta-nombre">${escapeHtml(a.nombre)}</p>
-        <div class="tarjeta-row"><span>Acumulado</span><span class="num">${formatoMoneda(acumulado)} de ${formatoMoneda(a.monto_meta)}</span></div>
-        <div class="tarjeta-row"><span>Avance</span><span class="num">${pct}%</span></div>
-        <button class="btn-text" style="width:auto;padding:6px 0 0;font-size:13px;" data-eliminar-apartado="${a.id}">Eliminar</button>
+        <div class="tarjeta-row" style="align-items:center;">
+          <p class="tarjeta-nombre">${escapeHtml(c.nombre)} ${esPrincipal ? '<span style="color:var(--accent);font-size:12px;">· Principal</span>' : ''}</p>
+          <button class="btn-text" style="width:auto;padding:4px 8px;font-size:13px;" data-eliminar-cuenta="${escapeHtml(c.nombre)}" title="Borrar cuenta">×</button>
+        </div>
+        <div class="tarjeta-row"><span>Disponible (fuera de apartados)</span><span class="num">${formatoMoneda(saldoGeneral)}</span></div>
+        ${!esPrincipal ? `<button class="btn-text" style="width:auto;padding:4px 0;font-size:13px;" data-marcar-principal="${escapeHtml(c.nombre)}">Marcar como principal</button>` : ''}
+        <div class="section" style="padding:10px 0 4px;"><p class="section-title" style="font-size:12px;">Apartados</p></div>
+        ${filasApartados}
       </div>
     `;
-  }).join('') || '<div class="empty-state">No tienes apartados activos todavía.</div>';
+  };
+
+  const listaCuentas = activas.map(bloqueCuenta).join('') || '<div class="empty-state">Agrega tu primera cuenta (banco) para empezar a organizar tus apartados.</div>';
+
+  const bloqueSinCuenta = sinCuenta.length ? `
+    <div class="section"><p class="section-title">Apartados sin cuenta asignada</p></div>
+    <div class="tarjeta-block">
+      ${sinCuenta.map((a) => `
+        <div class="tarjeta-row" style="align-items:center;">
+          <span>${escapeHtml(a.nombre)}</span>
+          <button class="btn-text" style="width:auto;padding:4px 8px;font-size:14px;" data-eliminar-apartado="${a.id}" title="Borrar">×</button>
+        </div>
+      `).join('')}
+      <p class="ledger-meta">Estos quedaron de antes de organizar por cuenta. Bórralos y créalos de nuevo ya dentro de la cuenta que corresponda.</p>
+    </div>
+  ` : '';
+
+  const opcionesCuentaSelect = activas.map((c) => `<option value="${escapeHtml(c.nombre)}">${escapeHtml(c.nombre)}</option>`).join('');
 
   return `
-    ${lista}
-    <div class="section"><p class="section-title">Nuevo apartado</p></div>
+    ${listaCuentas}
+    ${bloqueSinCuenta}
+
+    <div class="section"><p class="section-title">Nueva cuenta (banco)</p></div>
     <div class="tarjeta-block">
+      <div class="field">
+        <label for="ncu-nombre">Nombre (ej. "BBVA")</label>
+        <input type="text" id="ncu-nombre" />
+      </div>
+      <button id="btn-agregar-cuenta" class="btn-primary">Crear cuenta</button>
+    </div>
+
+    ${activas.length ? `
+    <div class="section"><p class="section-title">Nuevo apartado dentro de una cuenta</p></div>
+    <div class="tarjeta-block">
+      <div class="field">
+        <label for="na-cuenta">Cuenta</label>
+        <select id="na-cuenta">${opcionesCuentaSelect}</select>
+      </div>
       <div class="field">
         <label for="na-nombre">Nombre (ej. "Viaje fin de año")</label>
         <input type="text" id="na-nombre" />
       </div>
       <div class="field">
-        <label for="na-meta">Monto meta</label>
+        <label for="na-meta">Monto meta (opcional)</label>
         <input type="number" id="na-meta" class="num" placeholder="0.00" />
       </div>
       <button id="btn-agregar-apartado" class="btn-primary">Crear apartado</button>
     </div>
+    ` : ''}
   `;
 }
 
-async function agregarApartado() {
-  const nombre = document.getElementById('na-nombre').value.trim();
+async function agregarCuenta() {
+  const nombre = document.getElementById('ncu-nombre').value.trim();
   if (!nombre) return;
+  const esPrimera = !state.cuentas.some((c) => c.estatus !== 'cancelada');
+
+  await Sync.crearRegistro('Cuentas', {
+    nombre,
+    tipo: 'banco',
+    fecha_alta: new Date().toISOString().slice(0, 10),
+    fecha_baja: '',
+    estatus: 'activa',
+    es_principal: esPrimera, // la primera cuenta que crees se marca principal automáticamente
+  }, nombre);
+
+  await cargarEstadoLocal();
+  renderVista();
+}
+
+async function marcarCuentaPrincipal(nombre) {
+  for (const c of state.cuentas) {
+    const debeSerPrincipal = c.nombre === nombre;
+    if ((c.es_principal === true || c.es_principal === 'true') !== debeSerPrincipal) {
+      c.es_principal = debeSerPrincipal;
+      await Sync.actualizarRegistro('Cuentas', c);
+    }
+  }
+  await cargarEstadoLocal();
+  renderVista();
+}
+
+async function eliminarCuenta(nombre) {
+  const tieneApartados = state.apartados.some((a) => a.cuenta === nombre);
+  if (tieneApartados) {
+    alert('Esta cuenta todavía tiene apartados dentro. Bórralos primero o muévelos.');
+    return;
+  }
+  if (!confirm(`¿Eliminar la cuenta "${nombre}"? No se puede deshacer.`)) return;
+  await Sync.eliminarRegistro('Cuentas', nombre);
+  await cargarEstadoLocal();
+  renderVista();
+}
+
+async function agregarApartado() {
+  const cuenta = document.getElementById('na-cuenta').value;
+  const nombre = document.getElementById('na-nombre').value.trim();
+  if (!nombre || !cuenta) return;
   const montoMeta = Number(document.getElementById('na-meta').value || 0);
 
   await Sync.crearRegistro('Apartados', {
     nombre,
+    cuenta,
     monto_meta: montoMeta,
     fecha_meta: '',
     estatus: 'activo',
@@ -287,7 +432,7 @@ async function agregarApartado() {
 }
 
 async function eliminarApartado(id) {
-  if (!confirm('¿Eliminar este apartado?')) return;
+  if (!confirm('¿Eliminar este apartado? El dinero que tenía queda reflejado en el saldo general de la cuenta.')) return;
   await Sync.eliminarRegistro('Apartados', id);
   await cargarEstadoLocal();
   renderVista();
@@ -415,7 +560,7 @@ function abrirSheet(tarjetaPreset) {
   poblarSelects();
   if (tarjetaPreset) {
     document.getElementById('f-metodo').value = tarjetaPreset;
-    document.getElementById('field-msi').style.display = tipoSeleccionado === 'gasto' ? '' : 'none';
+    actualizarCamposPorTipo();
   }
   document.getElementById('sheet-backdrop').classList.add('open');
   document.getElementById('add-sheet').classList.add('open');
@@ -432,7 +577,41 @@ function cerrarSheet() {
 function seleccionarTipo(tipo) {
   tipoSeleccionado = tipo;
   document.querySelectorAll('#type-toggle button').forEach((b) => b.classList.toggle('active', b.dataset.type === tipo));
-  document.getElementById('field-msi').style.display = tipo === 'gasto' ? '' : 'none';
+  actualizarCamposPorTipo();
+}
+
+function actualizarCamposPorTipo() {
+  const metodoSel = document.getElementById('f-metodo');
+  const esTarjeta = metodoSel && metodoSel.value !== 'efectivo';
+  const tipo = tipoSeleccionado;
+
+  document.getElementById('field-msi').style.display = (tipo === 'gasto' && esTarjeta) ? '' : 'none';
+  document.getElementById('field-categoria').style.display = (tipo === 'apartado') ? 'none' : '';
+  document.getElementById('field-metodo').style.display = (tipo === 'ingreso' || tipo === 'apartado') ? 'none' : '';
+  document.getElementById('field-cuenta').style.display = (tipo === 'ingreso' || tipo === 'apartado') ? '' : 'none';
+  document.getElementById('field-apartado').style.display = (tipo === 'ingreso' || tipo === 'apartado') ? '' : 'none';
+
+  const cuentaLabel = document.querySelector('label[for="f-cuenta"]');
+  const apartadoLabel = document.querySelector('label[for="f-apartado"]');
+  if (tipo === 'apartado') {
+    if (cuentaLabel) cuentaLabel.textContent = 'Cuenta (de dónde sale el dinero)';
+    if (apartadoLabel) apartadoLabel.textContent = 'Apartado (a dónde va)';
+  } else {
+    if (cuentaLabel) cuentaLabel.textContent = 'Cuenta destino';
+    if (apartadoLabel) apartadoLabel.textContent = 'Apartado (opcional — si no, va al saldo general)';
+  }
+
+  poblarApartadosDeCuenta();
+}
+
+function poblarApartadosDeCuenta() {
+  const cuentaSel = document.getElementById('f-cuenta');
+  const apartadoSel = document.getElementById('f-apartado');
+  if (!cuentaSel || !apartadoSel) return;
+  const cuentaElegida = cuentaSel.value;
+  const opciones = state.apartados.filter((a) => a.cuenta === cuentaElegida);
+  const vacio = tipoSeleccionado === 'ingreso' ? '<option value="">Saldo general (sin apartado)</option>' : '';
+  apartadoSel.innerHTML = vacio + opciones.map((a) => `<option value="${escapeHtml(a.nombre)}">${escapeHtml(a.nombre)}</option>`).join('');
 }
 
 function poblarSelects() {
@@ -444,10 +623,14 @@ function poblarSelects() {
   const opcionesTarjetas = state.tarjetas.filter((t) => t.estatus !== 'cancelada').map((t) => `<option value="${escapeHtml(t.nombre)}">${escapeHtml(t.nombre)}</option>`).join('');
   metodoSel.innerHTML = opcionesEfectivo + opcionesTarjetas;
 
-  metodoSel.onchange = () => {
-    const esTarjeta = metodoSel.value !== 'efectivo';
-    document.getElementById('field-msi').style.display = esTarjeta && tipoSeleccionado === 'gasto' ? '' : 'none';
-  };
+  const cuentaSel = document.getElementById('f-cuenta');
+  const cuentasActivas = state.cuentas.filter((c) => c.estatus !== 'cancelada');
+  cuentaSel.innerHTML = cuentasActivas.map((c) => `<option value="${escapeHtml(c.nombre)}">${escapeHtml(c.nombre)}</option>`).join('') || '<option value="">Agrega una cuenta en la pestaña Cuentas</option>';
+  cuentaSel.onchange = poblarApartadosDeCuenta;
+
+  metodoSel.onchange = actualizarCamposPorTipo;
+
+  actualizarCamposPorTipo();
 }
 
 async function guardarMovimiento() {
@@ -459,14 +642,25 @@ async function guardarMovimiento() {
   const metodo = document.getElementById('f-metodo').value;
   const esTarjeta = metodo !== 'efectivo';
   const msiMeses = Number(document.getElementById('f-msi').value || 0);
+  const cuenta = document.getElementById('f-cuenta').value;
+  const apartado = document.getElementById('f-apartado').value;
 
   let tipo = tipoSeleccionado;
   if (tipo === 'gasto' && esTarjeta) tipo = msiMeses > 0 ? 'compra_msi' : 'compra_normal';
 
+  if ((tipo === 'ingreso' || tipo === 'apartado') && !cuenta) {
+    alert('Elige a qué cuenta va este movimiento. Si no tienes ninguna, crea una primero en la pestaña Cuentas.');
+    return;
+  }
+  if (tipo === 'apartado' && !apartado) {
+    alert('Elige a qué apartado va este movimiento.');
+    return;
+  }
+
   const registro = {
     fecha: new Date().toISOString().slice(0, 10),
     tipo,
-    descripcion,
+    descripcion: descripcion || (tipo === 'apartado' ? `Aportación a ${apartado}` : ''),
     categoria,
     monto,
     metodo_pago: esTarjeta ? 'tarjeta' : 'efectivo',
@@ -478,6 +672,8 @@ async function guardarMovimiento() {
     msi_restantes: msiMeses > 0 ? msiMeses : '',
     fecha_inicio: msiMeses > 0 ? new Date().toISOString().slice(0, 10) : '',
     fecha_fin: '',
+    cuenta: (tipo === 'ingreso' || tipo === 'apartado') ? cuenta : '',
+    apartado: (tipo === 'ingreso' || tipo === 'apartado') ? apartado : '',
   };
 
   await Sync.crearMovimiento(registro);
