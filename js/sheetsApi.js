@@ -12,7 +12,7 @@ const DRIVE_BASE = 'https://www.googleapis.com/drive/v3/files';
 const ESQUEMA = {
   Movimientos: ['id', 'fecha', 'tipo', 'descripcion', 'categoria', 'monto', 'metodo_pago', 'tarjeta', 'compra_relacionada_id', 'num_msi', 'mensualidad', 'msi_pagadas', 'msi_restantes', 'fecha_inicio', 'fecha_fin', 'cuenta', 'apartado'],
   Tarjetas: ['nombre', 'dia_corte', 'dia_pago', 'fecha_alta', 'fecha_baja', 'estatus'],
-  Cuentas: ['nombre', 'tipo', 'fecha_alta', 'fecha_baja', 'estatus', 'es_principal'],
+  Cuentas: ['nombre', 'tipo', 'fecha_alta', 'fecha_baja', 'estatus', 'es_principal', 'orden', 'excluir_balance'],
   Categorias: ['id', 'nombre', 'tipo'],
   Ingresos: ['id', 'fecha', 'descripcion', 'categoria', 'monto', 'cuenta_destino'],
   Apartados: ['id', 'nombre', 'cuenta', 'monto_meta', 'fecha_meta', 'estatus'],

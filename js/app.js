@@ -101,6 +101,21 @@ function cuentaPrincipal() {
   return state.cuentas.find((c) => c.es_principal === true || c.es_principal === 'true');
 }
 
+// Si varias cuentas comparten el mismo (o ningún) valor de orden — por
+// ejemplo, las que ya existían antes de agregar esta función — les asigna
+// un orden secuencial una sola vez, para que las flechas ▲▼ funcionen.
+async function normalizarOrdenCuentas() {
+  const activas = state.cuentas.filter((c) => c.estatus !== 'cancelada');
+  const ordenes = activas.map((c) => Number(c.orden || 0));
+  const hayDuplicados = new Set(ordenes).size !== ordenes.length;
+  if (!hayDuplicados) return;
+  for (let i = 0; i < activas.length; i++) {
+    activas[i].orden = i + 1;
+    await Sync.actualizarRegistro('Cuentas', activas[i]);
+  }
+  await cargarEstadoLocal();
+}
+
 // ---------- Navegación ----------
 function cambiarVista(vista) {
   state.vista = vista;
@@ -108,6 +123,9 @@ function cambiarVista(vista) {
   document.querySelectorAll('nav.tabbar button').forEach((b) => {
     b.classList.toggle('active', b.dataset.view === vista);
   });
+  if (vista === 'cuentas') {
+    normalizarOrdenCuentas().then(renderVista);
+  }
   renderVista();
 }
 
@@ -158,11 +176,23 @@ function renderVista() {
     document.querySelectorAll('[data-eliminar-apartado]').forEach((btn) => {
       btn.addEventListener('click', () => eliminarApartado(btn.dataset.eliminarApartado));
     });
+    document.querySelectorAll('[data-editar-apartado]').forEach((btn) => {
+      btn.addEventListener('click', () => renombrarApartado(btn.dataset.editarApartado));
+    });
     document.querySelectorAll('[data-eliminar-cuenta]').forEach((btn) => {
       btn.addEventListener('click', () => eliminarCuenta(btn.dataset.eliminarCuenta));
     });
     document.querySelectorAll('[data-marcar-principal]').forEach((btn) => {
       btn.addEventListener('click', () => marcarCuentaPrincipal(btn.dataset.marcarPrincipal));
+    });
+    document.querySelectorAll('[data-toggle-no-contable]').forEach((btn) => {
+      btn.addEventListener('click', () => alternarNoContable(btn.dataset.toggleNoContable));
+    });
+    document.querySelectorAll('[data-subir-cuenta]').forEach((btn) => {
+      btn.addEventListener('click', () => moverCuenta(btn.dataset.subirCuenta, 'arriba'));
+    });
+    document.querySelectorAll('[data-bajar-cuenta]').forEach((btn) => {
+      btn.addEventListener('click', () => moverCuenta(btn.dataset.bajarCuenta, 'abajo'));
     });
   }
 }
@@ -288,11 +318,22 @@ function renderTarjetaDetalle() {
 
 // ---------- Vista: Cuentas (bancos) con sus apartados anidados ----------
 function renderCuentas() {
-  const activas = state.cuentas.filter((c) => c.estatus !== 'cancelada');
+  const activas = state.cuentas
+    .filter((c) => c.estatus !== 'cancelada')
+    .sort((a, b) => Number(a.orden || 0) - Number(b.orden || 0));
   const sinCuenta = state.apartados.filter((a) => !a.cuenta || !activas.some((c) => c.nombre === a.cuenta));
 
-  const bloqueCuenta = (c) => {
+  const balanceGeneral = activas
+    .filter((c) => !(c.excluir_balance === true || c.excluir_balance === 'true'))
+    .reduce((acc, c) => acc + saldoGeneralCuenta(c.nombre) + state.apartados.filter((a) => a.cuenta === c.nombre).reduce((s, a) => s + saldoApartado(c.nombre, a.nombre), 0), 0);
+
+  const totalAparte = activas
+    .filter((c) => c.excluir_balance === true || c.excluir_balance === 'true')
+    .reduce((acc, c) => acc + saldoGeneralCuenta(c.nombre) + state.apartados.filter((a) => a.cuenta === c.nombre).reduce((s, a) => s + saldoApartado(c.nombre, a.nombre), 0), 0);
+
+  const bloqueCuenta = (c, idx) => {
     const esPrincipal = c.es_principal === true || c.es_principal === 'true';
+    const esNoContable = c.excluir_balance === true || c.excluir_balance === 'true';
     const saldoGeneral = saldoGeneralCuenta(c.nombre);
     const apartadosDeEsta = state.apartados.filter((a) => a.cuenta === c.nombre);
 
@@ -302,19 +343,32 @@ function renderCuentas() {
       return `
         <div class="tarjeta-row" style="align-items:center; padding-left:12px; border-left:2px solid var(--line);">
           <span>${escapeHtml(a.nombre)}<br><span class="ledger-meta">${formatoMoneda(acumulado)}${a.monto_meta ? ` de ${formatoMoneda(a.monto_meta)} · ${pct}%` : ''}</span></span>
-          <button class="btn-text" style="width:auto;padding:4px 8px;font-size:14px;" data-eliminar-apartado="${a.id}" title="Borrar">×</button>
+          <span>
+            <button class="btn-text" style="width:auto;padding:4px 6px;font-size:13px;" data-editar-apartado="${a.id}" title="Renombrar">✎</button>
+            <button class="btn-text" style="width:auto;padding:4px 6px;font-size:14px;" data-eliminar-apartado="${a.id}" title="Borrar">×</button>
+          </span>
         </div>
       `;
     }).join('') || '<p class="ledger-meta" style="padding-left:12px;">Sin apartados en esta cuenta.</p>';
 
+    const flechas = `
+      <span>
+        <button class="btn-text" style="width:auto;padding:4px 6px;font-size:13px;" data-subir-cuenta="${escapeHtml(c.nombre)}" ${idx === 0 ? 'disabled' : ''} title="Subir">▲</button>
+        <button class="btn-text" style="width:auto;padding:4px 6px;font-size:13px;" data-bajar-cuenta="${escapeHtml(c.nombre)}" ${idx === activas.length - 1 ? 'disabled' : ''} title="Bajar">▼</button>
+      </span>
+    `;
+
     return `
       <div class="tarjeta-block">
         <div class="tarjeta-row" style="align-items:center;">
-          <p class="tarjeta-nombre">${escapeHtml(c.nombre)} ${esPrincipal ? '<span style="color:var(--accent);font-size:12px;">· Principal</span>' : ''}</p>
+          <p class="tarjeta-nombre">${flechas} ${escapeHtml(c.nombre)} ${esPrincipal ? '<span style="color:var(--accent);font-size:12px;">· Principal</span>' : ''} ${esNoContable ? '<span style="color:var(--text-muted);font-size:12px;">· No cuenta para tu balance</span>' : ''}</p>
           <button class="btn-text" style="width:auto;padding:4px 8px;font-size:13px;" data-eliminar-cuenta="${escapeHtml(c.nombre)}" title="Borrar cuenta">×</button>
         </div>
         <div class="tarjeta-row"><span>Disponible (fuera de apartados)</span><span class="num">${formatoMoneda(saldoGeneral)}</span></div>
-        ${!esPrincipal ? `<button class="btn-text" style="width:auto;padding:4px 0;font-size:13px;" data-marcar-principal="${escapeHtml(c.nombre)}">Marcar como principal</button>` : ''}
+        <div class="tarjeta-row" style="gap:8px;">
+          ${!esPrincipal ? `<button class="btn-text" style="width:auto;padding:4px 0;font-size:13px;" data-marcar-principal="${escapeHtml(c.nombre)}">Marcar como principal</button>` : ''}
+          <button class="btn-text" style="width:auto;padding:4px 0;font-size:13px;" data-toggle-no-contable="${escapeHtml(c.nombre)}">${esNoContable ? 'Contar en mi balance' : 'No contar en mi balance (caja chica, préstamos, reembolsos)'}</button>
+        </div>
         <div class="section" style="padding:10px 0 4px;"><p class="section-title" style="font-size:12px;">Apartados</p></div>
         ${filasApartados}
       </div>
@@ -322,6 +376,13 @@ function renderCuentas() {
   };
 
   const listaCuentas = activas.map(bloqueCuenta).join('') || '<div class="empty-state">Agrega tu primera cuenta (banco) para empezar a organizar tus apartados.</div>';
+
+  const bloqueBalance = activas.length ? `
+    <div class="tarjeta-block" style="background:var(--surface-2, var(--surface));">
+      <div class="tarjeta-row"><span>Balance general</span><span class="num">${formatoMoneda(balanceGeneral)}</span></div>
+      ${totalAparte ? `<div class="tarjeta-row"><span class="ledger-meta">Dinero aparte (no cuenta para tu balance)</span><span class="num ledger-meta">${formatoMoneda(totalAparte)}</span></div>` : ''}
+    </div>
+  ` : '';
 
   const bloqueSinCuenta = sinCuenta.length ? `
     <div class="section"><p class="section-title">Apartados sin cuenta asignada</p></div>
@@ -339,6 +400,7 @@ function renderCuentas() {
   const opcionesCuentaSelect = activas.map((c) => `<option value="${escapeHtml(c.nombre)}">${escapeHtml(c.nombre)}</option>`).join('');
 
   return `
+    ${bloqueBalance}
     ${listaCuentas}
     ${bloqueSinCuenta}
 
@@ -347,6 +409,10 @@ function renderCuentas() {
       <div class="field">
         <label for="ncu-nombre">Nombre (ej. "BBVA")</label>
         <input type="text" id="ncu-nombre" />
+      </div>
+      <div class="field" style="flex-direction:row;align-items:center;gap:8px;">
+        <input type="checkbox" id="ncu-no-contable" style="width:auto;" />
+        <label for="ncu-no-contable" style="margin:0;">No contar en mi balance (caja chica, préstamos, reembolsos)</label>
       </div>
       <button id="btn-agregar-cuenta" class="btn-primary">Crear cuenta</button>
     </div>
@@ -375,7 +441,10 @@ function renderCuentas() {
 async function agregarCuenta() {
   const nombre = document.getElementById('ncu-nombre').value.trim();
   if (!nombre) return;
-  const esPrimera = !state.cuentas.some((c) => c.estatus !== 'cancelada');
+  const excluirBalance = document.getElementById('ncu-no-contable').checked;
+  const activas = state.cuentas.filter((c) => c.estatus !== 'cancelada');
+  const esPrimera = !activas.length;
+  const ordenMax = activas.reduce((max, c) => Math.max(max, Number(c.orden || 0)), 0);
 
   await Sync.crearRegistro('Cuentas', {
     nombre,
@@ -383,8 +452,61 @@ async function agregarCuenta() {
     fecha_alta: new Date().toISOString().slice(0, 10),
     fecha_baja: '',
     estatus: 'activa',
-    es_principal: esPrimera, // la primera cuenta que crees se marca principal automáticamente
+    es_principal: esPrimera && !excluirBalance, // una cuenta no-contable no debería ser la principal
+    orden: ordenMax + 1,
+    excluir_balance: excluirBalance,
   }, nombre);
+
+  await cargarEstadoLocal();
+  renderVista();
+}
+
+async function alternarNoContable(nombre) {
+  const cuenta = state.cuentas.find((c) => c.nombre === nombre);
+  if (!cuenta) return;
+  cuenta.excluir_balance = !(cuenta.excluir_balance === true || cuenta.excluir_balance === 'true');
+  await Sync.actualizarRegistro('Cuentas', cuenta);
+  await cargarEstadoLocal();
+  renderVista();
+}
+
+async function moverCuenta(nombre, direccion) {
+  const activas = state.cuentas
+    .filter((c) => c.estatus !== 'cancelada')
+    .sort((a, b) => Number(a.orden || 0) - Number(b.orden || 0));
+  const idx = activas.findIndex((c) => c.nombre === nombre);
+  const idxVecino = direccion === 'arriba' ? idx - 1 : idx + 1;
+  if (idx === -1 || idxVecino < 0 || idxVecino >= activas.length) return;
+
+  const actual = activas[idx];
+  const vecino = activas[idxVecino];
+  const ordenActual = Number(actual.orden || 0);
+  const ordenVecino = Number(vecino.orden || 0);
+  actual.orden = ordenVecino;
+  vecino.orden = ordenActual;
+
+  await Sync.actualizarRegistro('Cuentas', actual);
+  await Sync.actualizarRegistro('Cuentas', vecino);
+  await cargarEstadoLocal();
+  renderVista();
+}
+
+async function renombrarApartado(id) {
+  const apartado = state.apartados.find((a) => a.id === id);
+  if (!apartado) return;
+  const nuevoNombre = prompt('Nuevo nombre del apartado:', apartado.nombre);
+  if (!nuevoNombre || !nuevoNombre.trim() || nuevoNombre.trim() === apartado.nombre) return;
+  const nombreAnterior = apartado.nombre;
+  apartado.nombre = nuevoNombre.trim();
+  await Sync.actualizarRegistro('Apartados', apartado);
+
+  // Reasigna también los movimientos ya guardados que apuntaban al nombre
+  // anterior, para no perder el historial de aportaciones de ese apartado.
+  const afectados = state.movimientos.filter((m) => m.cuenta === apartado.cuenta && m.apartado === nombreAnterior);
+  for (const mov of afectados) {
+    mov.apartado = apartado.nombre;
+    await Sync.actualizarRegistro('Movimientos', mov);
+  }
 
   await cargarEstadoLocal();
   renderVista();
@@ -589,16 +711,13 @@ function actualizarCamposPorTipo() {
   document.getElementById('field-categoria').style.display = (tipo === 'apartado') ? 'none' : '';
   document.getElementById('field-metodo').style.display = (tipo === 'ingreso' || tipo === 'apartado') ? 'none' : '';
   document.getElementById('field-cuenta').style.display = (tipo === 'ingreso' || tipo === 'apartado') ? '' : 'none';
-  document.getElementById('field-apartado').style.display = (tipo === 'ingreso' || tipo === 'apartado') ? '' : 'none';
+  document.getElementById('field-apartado').style.display = (tipo === 'apartado') ? '' : 'none';
 
   const cuentaLabel = document.querySelector('label[for="f-cuenta"]');
-  const apartadoLabel = document.querySelector('label[for="f-apartado"]');
   if (tipo === 'apartado') {
     if (cuentaLabel) cuentaLabel.textContent = 'Cuenta (de dónde sale el dinero)';
-    if (apartadoLabel) apartadoLabel.textContent = 'Apartado (a dónde va)';
   } else {
-    if (cuentaLabel) cuentaLabel.textContent = 'Cuenta destino';
-    if (apartadoLabel) apartadoLabel.textContent = 'Apartado (opcional — si no, va al saldo general)';
+    if (cuentaLabel) cuentaLabel.textContent = 'Cuenta destino (siempre va al saldo disponible, fuera de apartados)';
   }
 
   poblarApartadosDeCuenta();
@@ -610,8 +729,7 @@ function poblarApartadosDeCuenta() {
   if (!cuentaSel || !apartadoSel) return;
   const cuentaElegida = cuentaSel.value;
   const opciones = state.apartados.filter((a) => a.cuenta === cuentaElegida);
-  const vacio = tipoSeleccionado === 'ingreso' ? '<option value="">Saldo general (sin apartado)</option>' : '';
-  apartadoSel.innerHTML = vacio + opciones.map((a) => `<option value="${escapeHtml(a.nombre)}">${escapeHtml(a.nombre)}</option>`).join('');
+  apartadoSel.innerHTML = opciones.map((a) => `<option value="${escapeHtml(a.nombre)}">${escapeHtml(a.nombre)}</option>`).join('') || '<option value="">Esta cuenta no tiene apartados</option>';
 }
 
 function poblarSelects() {
@@ -673,7 +791,7 @@ async function guardarMovimiento() {
     fecha_inicio: msiMeses > 0 ? new Date().toISOString().slice(0, 10) : '',
     fecha_fin: '',
     cuenta: (tipo === 'ingreso' || tipo === 'apartado') ? cuenta : '',
-    apartado: (tipo === 'ingreso' || tipo === 'apartado') ? apartado : '',
+    apartado: (tipo === 'apartado') ? apartado : '',
   };
 
   await Sync.crearMovimiento(registro);
