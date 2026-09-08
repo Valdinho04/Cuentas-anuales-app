@@ -71,6 +71,24 @@ const SheetsApi = {
     return spreadsheetId;
   },
 
+  /**
+   * Busca en Drive si ya existe el archivo de datos de la app (sin importar
+   * desde qué dispositivo se creó), para que todos los dispositivos usen
+   * siempre el mismo archivo en vez de crear uno nuevo cada vez.
+   * El scope drive.file permite ver archivos que esta app haya creado antes,
+   * en cualquier dispositivo, mientras sea la misma cuenta de Google.
+   */
+  async buscarHojaExistente() {
+    const params = new URLSearchParams({
+      q: "name='Mis Finanzas (datos de la app)' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+      orderBy: 'modifiedTime desc',
+      fields: 'files(id,name,modifiedTime)',
+      pageSize: '10',
+    });
+    const data = await authFetch(`${DRIVE_BASE}?${params.toString()}`);
+    return data.files || [];
+  },
+
   /** Lee todas las tablas de datos en una sola llamada. */
   async leerTodo(spreadsheetId) {
     const rangos = Object.keys(ESQUEMA).map((t) => `${t}!A2:Z10000`);

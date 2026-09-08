@@ -49,11 +49,21 @@ async function iniciarSesion(silencioso = false) {
   await Auth.signIn();
   localStorage.setItem('finanzas-ever-signed-in', '1');
 
-  let spreadsheetId = await Db.getConfig('spreadsheetId');
-  if (!spreadsheetId) {
-    spreadsheetId = await SheetsApi.crearHojaInicial();
-    await Db.setConfig('spreadsheetId', spreadsheetId);
+  // Siempre confirmamos contra Drive cuál es el archivo real de datos, en
+  // vez de confiar solo en lo que este dispositivo tenga guardado — así
+  // todos tus dispositivos (celular, compu, incógnito) terminan usando el
+  // mismo archivo en vez de crear uno nuevo cada vez.
+  let spreadsheetId;
+  const encontrados = await SheetsApi.buscarHojaExistente();
+  if (encontrados.length) {
+    spreadsheetId = encontrados[0].id; // el modificado más recientemente
+  } else {
+    spreadsheetId = await Db.getConfig('spreadsheetId');
+    if (!spreadsheetId) {
+      spreadsheetId = await SheetsApi.crearHojaInicial();
+    }
   }
+  await Db.setConfig('spreadsheetId', spreadsheetId);
 
   await Sync.sincronizarDesdeCero(spreadsheetId);
   await cargarEstadoLocal();
@@ -97,8 +107,17 @@ function saldoTotalApartados() {
   return state.apartados.reduce((acc, a) => acc + saldoApartado(a.cuenta, a.nombre), 0);
 }
 
+// Google Sheets devuelve los booleanos ya guardados como texto "TRUE"/"FALSE"
+// (mayúsculas) al releerlos, no como boolean de JS. Este helper los reconoce
+// sin importar si vienen como true/false, "TRUE"/"FALSE" o "true"/"false".
+function esVerdadero(valor) {
+  if (valor === true) return true;
+  if (typeof valor === 'string') return valor.trim().toUpperCase() === 'TRUE';
+  return false;
+}
+
 function cuentaPrincipal() {
-  return state.cuentas.find((c) => c.es_principal === true || c.es_principal === 'true');
+  return state.cuentas.find((c) => esVerdadero(c.es_principal));
 }
 
 // Si varias cuentas comparten el mismo (o ningún) valor de orden — por
@@ -324,16 +343,16 @@ function renderCuentas() {
   const sinCuenta = state.apartados.filter((a) => !a.cuenta || !activas.some((c) => c.nombre === a.cuenta));
 
   const balanceGeneral = activas
-    .filter((c) => !(c.excluir_balance === true || c.excluir_balance === 'true'))
+    .filter((c) => !esVerdadero(c.excluir_balance))
     .reduce((acc, c) => acc + saldoGeneralCuenta(c.nombre) + state.apartados.filter((a) => a.cuenta === c.nombre).reduce((s, a) => s + saldoApartado(c.nombre, a.nombre), 0), 0);
 
   const totalAparte = activas
-    .filter((c) => c.excluir_balance === true || c.excluir_balance === 'true')
+    .filter((c) => esVerdadero(c.excluir_balance))
     .reduce((acc, c) => acc + saldoGeneralCuenta(c.nombre) + state.apartados.filter((a) => a.cuenta === c.nombre).reduce((s, a) => s + saldoApartado(c.nombre, a.nombre), 0), 0);
 
   const bloqueCuenta = (c, idx) => {
-    const esPrincipal = c.es_principal === true || c.es_principal === 'true';
-    const esNoContable = c.excluir_balance === true || c.excluir_balance === 'true';
+    const esPrincipal = esVerdadero(c.es_principal);
+    const esNoContable = esVerdadero(c.excluir_balance);
     const saldoGeneral = saldoGeneralCuenta(c.nombre);
     const apartadosDeEsta = state.apartados.filter((a) => a.cuenta === c.nombre);
 
@@ -464,7 +483,7 @@ async function agregarCuenta() {
 async function alternarNoContable(nombre) {
   const cuenta = state.cuentas.find((c) => c.nombre === nombre);
   if (!cuenta) return;
-  cuenta.excluir_balance = !(cuenta.excluir_balance === true || cuenta.excluir_balance === 'true');
+  cuenta.excluir_balance = !esVerdadero(cuenta.excluir_balance);
   await Sync.actualizarRegistro('Cuentas', cuenta);
   await cargarEstadoLocal();
   renderVista();
@@ -515,7 +534,7 @@ async function renombrarApartado(id) {
 async function marcarCuentaPrincipal(nombre) {
   for (const c of state.cuentas) {
     const debeSerPrincipal = c.nombre === nombre;
-    if ((c.es_principal === true || c.es_principal === 'true') !== debeSerPrincipal) {
+    if (esVerdadero(c.es_principal) !== debeSerPrincipal) {
       c.es_principal = debeSerPrincipal;
       await Sync.actualizarRegistro('Cuentas', c);
     }
