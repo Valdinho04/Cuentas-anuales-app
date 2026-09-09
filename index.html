@@ -84,7 +84,7 @@
     </div>
 
     <div class="field" id="field-metodo">
-      <label for="f-metodo">Pagado con (elige la tarjeta si aplica)</label>
+      <label for="f-metodo">Pagado con / de dónde sale</label>
       <select id="f-metodo"></select>
     </div>
 
@@ -96,6 +96,14 @@
     <div class="field" id="field-apartado" style="display:none;">
       <label for="f-apartado">Apartado</label>
       <select id="f-apartado"></select>
+    </div>
+
+    <div class="field" id="field-direccion-apartado" style="display:none;">
+      <label>¿Qué quieres hacer?</label>
+      <div class="type-toggle" id="direccion-apartado-toggle">
+        <button data-direccion="aportar" class="active">Apartar (meter)</button>
+        <button data-direccion="retirar">Retirar (sacar)</button>
+      </div>
     </div>
 
     <div class="field" id="field-msi" style="display:none;">
