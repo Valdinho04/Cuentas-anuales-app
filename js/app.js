@@ -113,6 +113,75 @@ function saldoTotalApartados() {
   return state.apartados.reduce((acc, a) => acc + saldoApartado(a.cuenta, a.nombre), 0);
 }
 
+// ---------- Corte y pago de tarjetas ----------
+// Da un Date válido para "día X" de un mes dado, ajustando si ese mes
+// tiene menos días (ej. día 31 de febrero -> último día de febrero).
+function diaValidoDelMes(anio, mes, dia) {
+  const ultimoDiaDelMes = new Date(anio, mes + 1, 0).getDate();
+  return new Date(anio, mes, Math.min(dia, ultimoDiaDelMes));
+}
+
+function calcularCiclosTarjeta(tarjeta, fechaRef = new Date()) {
+  const diaCorte = Number(tarjeta.dia_corte || 0);
+  if (!diaCorte) return null;
+  const diaPago = Number(tarjeta.dia_pago || 0);
+
+  let ultimoCorte = diaValidoDelMes(fechaRef.getFullYear(), fechaRef.getMonth(), diaCorte);
+  if (ultimoCorte > fechaRef) {
+    ultimoCorte = diaValidoDelMes(fechaRef.getFullYear(), fechaRef.getMonth() - 1, diaCorte);
+  }
+  const corteAnterior = diaValidoDelMes(ultimoCorte.getFullYear(), ultimoCorte.getMonth() - 1, diaCorte);
+
+  let fechaPago = null;
+  if (diaPago) {
+    fechaPago = diaValidoDelMes(ultimoCorte.getFullYear(), ultimoCorte.getMonth() + 1, diaPago);
+    if (fechaPago <= ultimoCorte) {
+      fechaPago = diaValidoDelMes(ultimoCorte.getFullYear(), ultimoCorte.getMonth() + 2, diaPago);
+    }
+  }
+
+  return { ultimoCorte, corteAnterior, fechaPago };
+}
+
+// Nota: esto es una aproximación pensada para uso personal, no un estado de
+// cuenta exacto — no separa corte por corte los pagos ya aplicados, solo ve
+// qué se cargó desde el corte pasado y qué se ha pagado desde entonces.
+function resumenCorteTarjeta(tarjeta) {
+  const ciclos = calcularCiclosTarjeta(tarjeta);
+  if (!ciclos) return null;
+  const { ultimoCorte, corteAnterior, fechaPago } = ciclos;
+  const hoy = new Date();
+
+  const fechaDe = (m) => new Date((m.fecha || '1970-01-01') + 'T00:00:00');
+  const movsTarjeta = state.movimientos.filter((m) => m.tarjeta === tarjeta.nombre);
+
+  const gastosDelCorte = movsTarjeta
+    .filter((m) => m.tipo === 'compra_normal' && fechaDe(m) > corteAnterior && fechaDe(m) <= ultimoCorte)
+    .reduce((acc, m) => acc + Number(m.monto || 0), 0);
+
+  const mensualidadesMsi = movsTarjeta
+    .filter((m) => m.tipo === 'compra_msi' && Number(m.msi_restantes) > 0)
+    .reduce((acc, m) => acc + Number(m.mensualidad || 0), 0);
+
+  const pagosDesdeCorte = movsTarjeta
+    .filter((m) => m.tipo === 'pago_tarjeta' && fechaDe(m) > ultimoCorte)
+    .reduce((acc, m) => acc + Number(m.monto || 0), 0);
+
+  const montoAPagar = Math.max(0, gastosDelCorte + mensualidadesMsi - pagosDesdeCorte);
+
+  const gastoPeriodoActual = movsTarjeta
+    .filter((m) => (m.tipo === 'compra_normal' || m.tipo === 'compra_msi') && fechaDe(m) > ultimoCorte)
+    .reduce((acc, m) => acc + Number(m.monto || 0), 0);
+
+  return {
+    ultimoCorte,
+    fechaPago,
+    montoAPagar,
+    gastoPeriodoActual,
+    yaCorto: ultimoCorte <= hoy,
+  };
+}
+
 // Google Sheets devuelve los booleanos ya guardados como texto "TRUE"/"FALSE"
 // (mayúsculas) al releerlos, no como boolean de JS. Este helper los reconoce
 // sin importar si vienen como true/false, "TRUE"/"FALSE" o "true"/"false".
@@ -291,13 +360,16 @@ function renderTarjetas() {
     const totalCompras = compras.reduce((a, m) => a + Number(m.monto || 0), 0);
     const saldo = totalCompras - pagos;
     const msiActivos = compras.filter((m) => m.tipo === 'compra_msi' && Number(m.msi_restantes) > 0);
+    const corte = resumenCorteTarjeta(t);
+    const debePagar = corte && corte.montoAPagar > 0;
 
     return `
-      <div class="tarjeta-block" style="cursor:pointer;" data-abrir-tarjeta="${escapeHtml(t.nombre)}">
-        <p class="tarjeta-nombre">${escapeHtml(t.nombre)}</p>
-        <div class="tarjeta-row"><span>Saldo</span><span class="num">${formatoMoneda(saldo)}</span></div>
+      <div class="tarjeta-block" style="cursor:pointer;${debePagar ? 'background:#3a3420;border:1px solid var(--accent);' : ''}" data-abrir-tarjeta="${escapeHtml(t.nombre)}">
+        <p class="tarjeta-nombre">${escapeHtml(t.nombre)} ${debePagar ? '<span style="color:var(--accent);font-size:12px;">· Ya cortó — hay que pagar</span>' : ''}</p>
+        ${debePagar ? `<div class="tarjeta-row"><span>A pagar${corte.fechaPago ? ' antes del ' + formatoFecha(corte.fechaPago.toISOString().slice(0, 10)) : ''}</span><span class="num" style="color:var(--accent);">${formatoMoneda(corte.montoAPagar)}</span></div>` : ''}
+        ${corte && corte.gastoPeriodoActual ? `<div class="tarjeta-row"><span>Llevas gastado este periodo</span><span class="num">${formatoMoneda(corte.gastoPeriodoActual)}</span></div>` : ''}
+        <div class="tarjeta-row"><span>Saldo total</span><span class="num">${formatoMoneda(saldo)}</span></div>
         <div class="tarjeta-row"><span>MSI activos</span><span class="num">${msiActivos.length}</span></div>
-        <div class="tarjeta-row"><span>Movimientos</span><span class="num">${compras.length}</span></div>
       </div>
     `;
   }).join('');
@@ -314,6 +386,8 @@ function renderTarjetaDetalle() {
   const normales = movs.filter((m) => m.tipo === 'compra_normal').sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
   const pagos = movs.filter((m) => m.tipo === 'pago_tarjeta');
   const saldo = [...msi, ...normales].reduce((a, m) => a + Number(m.monto || 0), 0) - pagos.reduce((a, m) => a + Number(m.monto || 0), 0);
+  const corte = resumenCorteTarjeta(t);
+  const debePagar = corte && corte.montoAPagar > 0;
 
   const filaCompra = (m) => `
     <div class="ledger-row">
@@ -330,9 +404,11 @@ function renderTarjetaDetalle() {
     <div class="section" style="display:flex; align-items:center; gap:10px;">
       <button id="btn-volver-tarjetas" class="btn-text" style="width:auto;padding:4px 0;">← Tarjetas</button>
     </div>
-    <div class="tarjeta-block">
-      <p class="tarjeta-nombre">${escapeHtml(nombre)}</p>
-      <div class="tarjeta-row"><span>Saldo</span><span class="num">${formatoMoneda(saldo)}</span></div>
+    <div class="tarjeta-block" style="${debePagar ? 'background:#3a3420;border:1px solid var(--accent);' : ''}">
+      <p class="tarjeta-nombre">${escapeHtml(nombre)} ${debePagar ? '<span style="color:var(--accent);font-size:12px;">· Ya cortó — hay que pagar</span>' : ''}</p>
+      ${debePagar ? `<div class="tarjeta-row"><span>A pagar${corte.fechaPago ? ' antes del ' + formatoFecha(corte.fechaPago.toISOString().slice(0, 10)) : ''}</span><span class="num" style="color:var(--accent);">${formatoMoneda(corte.montoAPagar)}</span></div>` : ''}
+      ${corte && corte.gastoPeriodoActual ? `<div class="tarjeta-row"><span>Llevas gastado este periodo (aún sin cortar)</span><span class="num">${formatoMoneda(corte.gastoPeriodoActual)}</span></div>` : ''}
+      <div class="tarjeta-row"><span>Saldo total (todo lo que debes)</span><span class="num">${formatoMoneda(saldo)}</span></div>
       <div class="tarjeta-row"><span>Día de corte</span><span class="num">${t.dia_corte || '—'}</span></div>
       <div class="tarjeta-row"><span>Día de pago</span><span class="num">${t.dia_pago || '—'}</span></div>
     </div>
