@@ -370,7 +370,7 @@ function renderCuentas() {
       const pct = a.monto_meta ? Math.min(100, Math.round((acumulado / a.monto_meta) * 100)) : 0;
       return `
         <div class="tarjeta-row" style="align-items:center; padding-left:12px; border-left:2px solid var(--line);">
-          <span>${escapeHtml(a.nombre)}<br><span class="ledger-meta">${formatoMoneda(acumulado)}${a.monto_meta ? ` de ${formatoMoneda(a.monto_meta)} · ${pct}%` : ''}</span></span>
+          <span>${escapeHtml(a.nombre)}<br><span class="num" style="color:var(--text);">${formatoMoneda(acumulado)}</span>${a.monto_meta ? ` <span class="ledger-meta">de ${formatoMoneda(a.monto_meta)} · ${pct}%</span>` : ''}</span>
           <span>
             <button class="btn-text" style="width:auto;padding:4px 6px;font-size:13px;" data-editar-apartado="${a.id}" title="Renombrar">✎</button>
             <button class="btn-text" style="width:auto;padding:4px 6px;font-size:14px;" data-eliminar-apartado="${a.id}" title="Borrar">×</button>
@@ -792,7 +792,7 @@ function poblarSelects() {
   const opcionesTarjetas = state.tarjetas.filter((t) => t.estatus !== 'cancelada')
     .map((t) => `<option value="${escapeHtml(t.nombre)}">${escapeHtml(t.nombre)}</option>`).join('');
   const opcionesCuentas = cuentasActivasTodas
-    .map((c) => `<option value="cuenta::${escapeHtml(c.nombre)}">${escapeHtml(c.nombre)} (disponible)</option>`).join('');
+    .map((c) => `<option value="cuenta::${escapeHtml(c.nombre)}">${escapeHtml(c.nombre)}</option>`).join('');
   const opcionesApartados = state.apartados
     .filter((a) => cuentasActivasTodas.some((c) => c.nombre === a.cuenta))
     .map((a) => `<option value="apartado::${escapeHtml(a.cuenta)}::${escapeHtml(a.nombre)}">${escapeHtml(a.nombre)} (${escapeHtml(a.cuenta)})</option>`).join('');
