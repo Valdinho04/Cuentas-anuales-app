@@ -357,8 +357,9 @@ function renderTarjetas() {
     const movs = state.movimientos.filter((m) => m.tarjeta === t.nombre);
     const compras = movs.filter((m) => m.tipo === 'compra_normal' || m.tipo === 'compra_msi');
     const pagos = movs.filter((m) => m.tipo === 'pago_tarjeta').reduce((a, m) => a + Number(m.monto || 0), 0);
-    const totalCompras = compras.reduce((a, m) => a + Number(m.monto || 0), 0);
-    const saldo = totalCompras - pagos;
+    const totalNormales = compras.filter((m) => m.tipo === 'compra_normal').reduce((a, m) => a + Number(m.monto || 0), 0);
+    const saldoMsiPendiente = compras.filter((m) => m.tipo === 'compra_msi').reduce((a, m) => a + Number(m.mensualidad || 0) * Number(m.msi_restantes || 0), 0);
+    const saldo = totalNormales + saldoMsiPendiente - pagos;
     const msiActivos = compras.filter((m) => m.tipo === 'compra_msi' && Number(m.msi_restantes) > 0);
     const corte = resumenCorteTarjeta(t);
     const debePagar = corte && corte.montoAPagar > 0;
@@ -385,7 +386,9 @@ function renderTarjetaDetalle() {
   const msi = movs.filter((m) => m.tipo === 'compra_msi').sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
   const normales = movs.filter((m) => m.tipo === 'compra_normal').sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
   const pagos = movs.filter((m) => m.tipo === 'pago_tarjeta');
-  const saldo = [...msi, ...normales].reduce((a, m) => a + Number(m.monto || 0), 0) - pagos.reduce((a, m) => a + Number(m.monto || 0), 0);
+  const totalNormales = normales.reduce((a, m) => a + Number(m.monto || 0), 0);
+  const saldoMsiPendiente = msi.reduce((a, m) => a + Number(m.mensualidad || 0) * Number(m.msi_restantes || 0), 0);
+  const saldo = totalNormales + saldoMsiPendiente - pagos.reduce((a, m) => a + Number(m.monto || 0), 0);
   const corte = resumenCorteTarjeta(t);
   const debePagar = corte && corte.montoAPagar > 0;
 
@@ -798,6 +801,9 @@ function cerrarSheet() {
   document.getElementById('add-sheet').classList.remove('open');
   document.getElementById('f-monto').value = '';
   document.getElementById('f-desc').value = '';
+  document.getElementById('f-msi').value = '0';
+  document.getElementById('f-msi-fecha').value = '';
+  document.getElementById('f-msi-pagados').value = '0';
 }
 
 let direccionApartado = 'aportar';
@@ -830,13 +836,19 @@ function actualizarCamposPorTipo() {
   const metodoSel = document.getElementById('f-metodo');
   const metodo = metodoSel ? parseMetodo(metodoSel.value) : { tipo: 'efectivo' };
   const tipo = tipoSeleccionado;
+  const msiVal = Number(document.getElementById('f-msi').value || 0);
 
   document.getElementById('field-msi').style.display = (tipo === 'gasto' && metodo.tipo === 'tarjeta') ? '' : 'none';
+  document.getElementById('field-msi-detalle').style.display = (tipo === 'gasto' && metodo.tipo === 'tarjeta' && msiVal > 0) ? '' : 'none';
+  document.getElementById('field-tarjeta-pago').style.display = (tipo === 'pago_tarjeta') ? '' : 'none';
   document.getElementById('field-categoria').style.display = (tipo === 'apartado') ? 'none' : '';
   document.getElementById('field-metodo').style.display = (tipo === 'ingreso' || tipo === 'apartado') ? 'none' : '';
   document.getElementById('field-cuenta').style.display = (tipo === 'ingreso' || tipo === 'apartado') ? '' : 'none';
   document.getElementById('field-apartado').style.display = (tipo === 'apartado') ? '' : 'none';
   document.getElementById('field-direccion-apartado').style.display = (tipo === 'apartado') ? '' : 'none';
+
+  const metodoLabel = document.querySelector('label[for="f-metodo"]');
+  if (metodoLabel) metodoLabel.textContent = tipo === 'pago_tarjeta' ? '¿De dónde sale el dinero para pagar?' : 'Pagado con / de dónde sale';
 
   const cuentaLabel = document.querySelector('label[for="f-cuenta"]');
   if (tipo === 'apartado') {
@@ -882,7 +894,18 @@ function poblarSelects() {
   cuentaSel.innerHTML = cuentasActivasTodas.map((c) => `<option value="${escapeHtml(c.nombre)}">${escapeHtml(c.nombre)}</option>`).join('') || '<option value="">Agrega una cuenta en la pestaña Cuentas</option>';
   cuentaSel.onchange = poblarApartadosDeCuenta;
 
+  const tarjetasActivas = state.tarjetas.filter((t) => t.estatus !== 'cancelada');
+  const tarjetaPagoSel = document.getElementById('f-tarjeta-pago');
+  tarjetaPagoSel.innerHTML = tarjetasActivas.map((t) => `<option value="${escapeHtml(t.nombre)}">${escapeHtml(t.nombre)}</option>`).join('') || '<option value="">Agrega una tarjeta en Ajustes</option>';
+
   metodoSel.onchange = actualizarCamposPorTipo;
+  document.getElementById('f-msi').onchange = () => {
+    const msiVal = Number(document.getElementById('f-msi').value || 0);
+    if (msiVal > 0 && !document.getElementById('f-msi-fecha').value) {
+      document.getElementById('f-msi-fecha').value = new Date().toISOString().slice(0, 10);
+    }
+    actualizarCamposPorTipo();
+  };
   document.querySelectorAll('#direccion-apartado-toggle button').forEach((b) => {
     b.onclick = () => seleccionarDireccionApartado(b.dataset.direccion);
   });
@@ -900,20 +923,25 @@ async function guardarMovimiento() {
   const categoria = document.getElementById('f-categoria').value;
   const metodo = parseMetodo(document.getElementById('f-metodo').value);
   const msiMeses = Number(document.getElementById('f-msi').value || 0);
+  const msiFecha = document.getElementById('f-msi-fecha').value;
+  const msiPagadosInput = Number(document.getElementById('f-msi-pagados').value || 0);
   const cuentaSel = document.getElementById('f-cuenta').value;
   const apartadoSel = document.getElementById('f-apartado').value;
+  const tarjetaPagoSel = document.getElementById('f-tarjeta-pago').value;
 
   let tipo = tipoSeleccionado;
   let registroCuenta = '';
   let registroApartado = '';
   let metodoPago = 'efectivo';
   let tarjetaNombre = '';
+  let fecha = new Date().toISOString().slice(0, 10);
 
-  if (tipo === 'gasto' || tipo === 'pago_tarjeta') {
+  if (tipo === 'gasto') {
     if (metodo.tipo === 'tarjeta') {
       tarjetaNombre = metodo.tarjeta;
       metodoPago = 'tarjeta';
-      if (tipo === 'gasto') tipo = msiMeses > 0 ? 'compra_msi' : 'compra_normal';
+      tipo = msiMeses > 0 ? 'compra_msi' : 'compra_normal';
+      if (msiMeses > 0 && msiFecha) fecha = msiFecha;
     } else if (metodo.tipo === 'cuenta') {
       metodoPago = 'debito';
       registroCuenta = metodo.cuenta;
@@ -921,6 +949,24 @@ async function guardarMovimiento() {
       metodoPago = 'apartado';
       registroCuenta = metodo.cuenta;
       registroApartado = metodo.apartado;
+    } else {
+      metodoPago = 'efectivo';
+    }
+  } else if (tipo === 'pago_tarjeta') {
+    if (!tarjetaPagoSel) {
+      alert('Elige qué tarjeta estás pagando.');
+      return;
+    }
+    tarjetaNombre = tarjetaPagoSel;
+    if (metodo.tipo === 'cuenta') {
+      metodoPago = 'debito';
+      registroCuenta = metodo.cuenta;
+    } else if (metodo.tipo === 'apartado') {
+      metodoPago = 'apartado';
+      registroCuenta = metodo.cuenta;
+      registroApartado = metodo.apartado;
+    } else if (metodo.tipo === 'tarjeta') {
+      metodoPago = 'tarjeta'; // caso raro: pagar una tarjeta con otra (disposición de efectivo)
     } else {
       metodoPago = 'efectivo';
     }
@@ -948,8 +994,11 @@ async function guardarMovimiento() {
     ? (direccionApartado === 'retirar' ? `Retiro de ${apartadoSel}` : `Aportación a ${apartadoSel}`)
     : '';
 
+  const msiPagadas = tipo === 'compra_msi' ? Math.min(Math.max(msiPagadosInput, 0), msiMeses) : '';
+  const msiRestantes = tipo === 'compra_msi' ? Math.max(msiMeses - msiPagadas, 0) : '';
+
   const registro = {
-    fecha: new Date().toISOString().slice(0, 10),
+    fecha,
     tipo,
     descripcion: descripcion || descripcionApartado,
     categoria,
@@ -959,9 +1008,9 @@ async function guardarMovimiento() {
     compra_relacionada_id: '',
     num_msi: msiMeses || '',
     mensualidad: msiMeses > 0 ? Math.round((monto / msiMeses) * 100) / 100 : '',
-    msi_pagadas: msiMeses > 0 ? 0 : '',
-    msi_restantes: msiMeses > 0 ? msiMeses : '',
-    fecha_inicio: msiMeses > 0 ? new Date().toISOString().slice(0, 10) : '',
+    msi_pagadas: msiPagadas,
+    msi_restantes: msiRestantes,
+    fecha_inicio: tipo === 'compra_msi' ? fecha : '',
     fecha_fin: '',
     cuenta: registroCuenta,
     apartado: registroApartado,
