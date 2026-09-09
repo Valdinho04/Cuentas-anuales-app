@@ -83,22 +83,28 @@ async function cargarEstadoLocal() {
 
 // ---------- Cálculos de saldo de cuentas y apartados ----------
 // Saldo general de una cuenta = ingresos que entraron directo a esa cuenta
-// (sin apartado) menos lo que se ha "apartado" (movido) desde esa cuenta.
-// Nota: por ahora los gastos en efectivo todavía no se restan de ninguna
-// cuenta específica — eso vendrá en un siguiente ajuste.
+// (sin apartado) + retiros de apartados hacia la cuenta, menos lo aportado
+// a apartados y menos los gastos pagados directo desde el disponible
+// (sin pasar por un apartado).
 function saldoGeneralCuenta(nombreCuenta) {
   return state.movimientos.reduce((acc, m) => {
     if (m.cuenta !== nombreCuenta) return acc;
     if (m.tipo === 'ingreso' && !m.apartado) return acc + Number(m.monto || 0);
     if (m.tipo === 'apartado') return acc - Number(m.monto || 0);
+    if (esTipoGasto(m.tipo) && !m.apartado) return acc - Number(m.monto || 0);
     return acc;
   }, 0);
+}
+
+function esTipoGasto(tipo) {
+  return tipo === 'gasto' || tipo === 'compra_normal' || tipo === 'compra_msi';
 }
 
 function saldoApartado(nombreCuenta, nombreApartado) {
   return state.movimientos.reduce((acc, m) => {
     if (m.cuenta !== nombreCuenta || m.apartado !== nombreApartado) return acc;
     if (m.tipo === 'ingreso' || m.tipo === 'apartado') return acc + Number(m.monto || 0);
+    if (esTipoGasto(m.tipo)) return acc - Number(m.monto || 0);
     return acc;
   }, 0);
 }
@@ -250,18 +256,21 @@ function renderInicio() {
   if (!state.movimientos.length) {
     return `<div class="empty-state">Aún no tienes movimientos. Toca “+” para registrar el primero.</div>`;
   }
-  const filas = state.movimientos.slice(0, 50).map((m) => `
+  const filas = state.movimientos.slice(0, 50).map((m) => {
+    const esPositivo = m.tipo === 'ingreso' || (m.tipo === 'apartado' && Number(m.monto) > 0);
+    return `
     <div class="ledger-row">
       <div class="ledger-main">
         <p class="ledger-desc">${escapeHtml(m.descripcion || sinDescripcion(m.tipo))}</p>
         <p class="ledger-meta">${formatoFecha(m.fecha)} · ${m.categoria || '—'}${m.tarjeta ? ' · ' + escapeHtml(m.tarjeta) : ''}${m.cuenta ? ' · ' + escapeHtml(m.cuenta) + (m.apartado ? ' → ' + escapeHtml(m.apartado) : '') : ''}</p>
       </div>
-      <div class="ledger-amount ${(m.tipo === 'ingreso' || m.tipo === 'apartado') ? 'ingreso' : 'gasto'} num">
-        ${(m.tipo === 'ingreso' || m.tipo === 'apartado') ? '+' : '−'}${formatoMoneda(Math.abs(Number(m.monto || 0)))}
+      <div class="ledger-amount ${esPositivo ? 'ingreso' : 'gasto'} num">
+        ${esPositivo ? '+' : '−'}${formatoMoneda(Math.abs(Number(m.monto || 0)))}
       </div>
       <button class="btn-text" style="width:auto;padding:0 0 0 6px;font-size:16px;" data-eliminar-mov="${m.id}" title="Borrar">×</button>
     </div>
-  `).join('');
+  `;
+  }).join('');
   return `<div class="section"><p class="section-title">Movimientos recientes</p></div><div class="ledger">${filas}</div>`;
 }
 
@@ -715,26 +724,47 @@ function cerrarSheet() {
   document.getElementById('f-desc').value = '';
 }
 
+let direccionApartado = 'aportar';
+
 function seleccionarTipo(tipo) {
   tipoSeleccionado = tipo;
   document.querySelectorAll('#type-toggle button').forEach((b) => b.classList.toggle('active', b.dataset.type === tipo));
   actualizarCamposPorTipo();
 }
 
+function seleccionarDireccionApartado(direccion) {
+  direccionApartado = direccion;
+  document.querySelectorAll('#direccion-apartado-toggle button').forEach((b) => b.classList.toggle('active', b.dataset.direccion === direccion));
+}
+
+// El selector "Pagado con / de dónde sale" mezcla tarjetas (valor = nombre
+// tal cual), cuentas (valor "cuenta::Nombre") y apartados
+// (valor "apartado::Cuenta::Apartado"). Esta función lo interpreta.
+function parseMetodo(valor) {
+  if (!valor || valor === 'efectivo') return { tipo: 'efectivo' };
+  if (valor.startsWith('cuenta::')) return { tipo: 'cuenta', cuenta: valor.slice('cuenta::'.length) };
+  if (valor.startsWith('apartado::')) {
+    const partes = valor.split('::');
+    return { tipo: 'apartado', cuenta: partes[1], apartado: partes[2] };
+  }
+  return { tipo: 'tarjeta', tarjeta: valor };
+}
+
 function actualizarCamposPorTipo() {
   const metodoSel = document.getElementById('f-metodo');
-  const esTarjeta = metodoSel && metodoSel.value !== 'efectivo';
+  const metodo = metodoSel ? parseMetodo(metodoSel.value) : { tipo: 'efectivo' };
   const tipo = tipoSeleccionado;
 
-  document.getElementById('field-msi').style.display = (tipo === 'gasto' && esTarjeta) ? '' : 'none';
+  document.getElementById('field-msi').style.display = (tipo === 'gasto' && metodo.tipo === 'tarjeta') ? '' : 'none';
   document.getElementById('field-categoria').style.display = (tipo === 'apartado') ? 'none' : '';
   document.getElementById('field-metodo').style.display = (tipo === 'ingreso' || tipo === 'apartado') ? 'none' : '';
   document.getElementById('field-cuenta').style.display = (tipo === 'ingreso' || tipo === 'apartado') ? '' : 'none';
   document.getElementById('field-apartado').style.display = (tipo === 'apartado') ? '' : 'none';
+  document.getElementById('field-direccion-apartado').style.display = (tipo === 'apartado') ? '' : 'none';
 
   const cuentaLabel = document.querySelector('label[for="f-cuenta"]');
   if (tipo === 'apartado') {
-    if (cuentaLabel) cuentaLabel.textContent = 'Cuenta (de dónde sale el dinero)';
+    if (cuentaLabel) cuentaLabel.textContent = 'Cuenta';
   } else {
     if (cuentaLabel) cuentaLabel.textContent = 'Cuenta destino (siempre va al saldo disponible, fuera de apartados)';
   }
@@ -755,17 +785,33 @@ function poblarSelects() {
   const catSel = document.getElementById('f-categoria');
   catSel.innerHTML = state.categorias.map((c) => `<option value="${escapeHtml(c.nombre)}">${escapeHtml(c.nombre)}</option>`).join('') || '<option value="General">General</option>';
 
+  const cuentasActivasTodas = state.cuentas.filter((c) => c.estatus !== 'cancelada');
+
   const metodoSel = document.getElementById('f-metodo');
   const opcionesEfectivo = '<option value="efectivo">Efectivo</option>';
-  const opcionesTarjetas = state.tarjetas.filter((t) => t.estatus !== 'cancelada').map((t) => `<option value="${escapeHtml(t.nombre)}">${escapeHtml(t.nombre)}</option>`).join('');
-  metodoSel.innerHTML = opcionesEfectivo + opcionesTarjetas;
+  const opcionesTarjetas = state.tarjetas.filter((t) => t.estatus !== 'cancelada')
+    .map((t) => `<option value="${escapeHtml(t.nombre)}">${escapeHtml(t.nombre)}</option>`).join('');
+  const opcionesCuentas = cuentasActivasTodas
+    .map((c) => `<option value="cuenta::${escapeHtml(c.nombre)}">${escapeHtml(c.nombre)} (disponible)</option>`).join('');
+  const opcionesApartados = state.apartados
+    .filter((a) => cuentasActivasTodas.some((c) => c.nombre === a.cuenta))
+    .map((a) => `<option value="apartado::${escapeHtml(a.cuenta)}::${escapeHtml(a.nombre)}">${escapeHtml(a.nombre)} (${escapeHtml(a.cuenta)})</option>`).join('');
+
+  metodoSel.innerHTML = opcionesEfectivo
+    + (opcionesTarjetas ? `<optgroup label="Tarjetas">${opcionesTarjetas}</optgroup>` : '')
+    + (opcionesCuentas ? `<optgroup label="Cuentas (disponible)">${opcionesCuentas}</optgroup>` : '')
+    + (opcionesApartados ? `<optgroup label="Apartados">${opcionesApartados}</optgroup>` : '');
 
   const cuentaSel = document.getElementById('f-cuenta');
-  const cuentasActivas = state.cuentas.filter((c) => c.estatus !== 'cancelada');
-  cuentaSel.innerHTML = cuentasActivas.map((c) => `<option value="${escapeHtml(c.nombre)}">${escapeHtml(c.nombre)}</option>`).join('') || '<option value="">Agrega una cuenta en la pestaña Cuentas</option>';
+  cuentaSel.innerHTML = cuentasActivasTodas.map((c) => `<option value="${escapeHtml(c.nombre)}">${escapeHtml(c.nombre)}</option>`).join('') || '<option value="">Agrega una cuenta en la pestaña Cuentas</option>';
   cuentaSel.onchange = poblarApartadosDeCuenta;
 
   metodoSel.onchange = actualizarCamposPorTipo;
+  document.querySelectorAll('#direccion-apartado-toggle button').forEach((b) => {
+    b.onclick = () => seleccionarDireccionApartado(b.dataset.direccion);
+  });
+  direccionApartado = 'aportar';
+  document.querySelectorAll('#direccion-apartado-toggle button').forEach((b) => b.classList.toggle('active', b.dataset.direccion === 'aportar'));
 
   actualizarCamposPorTipo();
 }
@@ -776,32 +822,64 @@ async function guardarMovimiento() {
 
   const descripcion = document.getElementById('f-desc').value.trim();
   const categoria = document.getElementById('f-categoria').value;
-  const metodo = document.getElementById('f-metodo').value;
-  const esTarjeta = metodo !== 'efectivo';
+  const metodo = parseMetodo(document.getElementById('f-metodo').value);
   const msiMeses = Number(document.getElementById('f-msi').value || 0);
-  const cuenta = document.getElementById('f-cuenta').value;
-  const apartado = document.getElementById('f-apartado').value;
+  const cuentaSel = document.getElementById('f-cuenta').value;
+  const apartadoSel = document.getElementById('f-apartado').value;
 
   let tipo = tipoSeleccionado;
-  if (tipo === 'gasto' && esTarjeta) tipo = msiMeses > 0 ? 'compra_msi' : 'compra_normal';
+  let registroCuenta = '';
+  let registroApartado = '';
+  let metodoPago = 'efectivo';
+  let tarjetaNombre = '';
 
-  if ((tipo === 'ingreso' || tipo === 'apartado') && !cuenta) {
-    alert('Elige a qué cuenta va este movimiento. Si no tienes ninguna, crea una primero en la pestaña Cuentas.');
-    return;
+  if (tipo === 'gasto' || tipo === 'pago_tarjeta') {
+    if (metodo.tipo === 'tarjeta') {
+      tarjetaNombre = metodo.tarjeta;
+      metodoPago = 'tarjeta';
+      if (tipo === 'gasto') tipo = msiMeses > 0 ? 'compra_msi' : 'compra_normal';
+    } else if (metodo.tipo === 'cuenta') {
+      metodoPago = 'debito';
+      registroCuenta = metodo.cuenta;
+    } else if (metodo.tipo === 'apartado') {
+      metodoPago = 'apartado';
+      registroCuenta = metodo.cuenta;
+      registroApartado = metodo.apartado;
+    } else {
+      metodoPago = 'efectivo';
+    }
+  } else if (tipo === 'ingreso') {
+    if (!cuentaSel) {
+      alert('Elige a qué cuenta va este ingreso. Si no tienes ninguna, crea una primero en la pestaña Cuentas.');
+      return;
+    }
+    registroCuenta = cuentaSel;
+  } else if (tipo === 'apartado') {
+    if (!cuentaSel) {
+      alert('Elige la cuenta.');
+      return;
+    }
+    if (!apartadoSel) {
+      alert('Elige el apartado.');
+      return;
+    }
+    registroCuenta = cuentaSel;
+    registroApartado = apartadoSel;
   }
-  if (tipo === 'apartado' && !apartado) {
-    alert('Elige a qué apartado va este movimiento.');
-    return;
-  }
+
+  const montoFinal = (tipo === 'apartado' && direccionApartado === 'retirar') ? -Math.abs(monto) : Math.abs(monto);
+  const descripcionApartado = tipo === 'apartado'
+    ? (direccionApartado === 'retirar' ? `Retiro de ${apartadoSel}` : `Aportación a ${apartadoSel}`)
+    : '';
 
   const registro = {
     fecha: new Date().toISOString().slice(0, 10),
     tipo,
-    descripcion: descripcion || (tipo === 'apartado' ? `Aportación a ${apartado}` : ''),
+    descripcion: descripcion || descripcionApartado,
     categoria,
-    monto,
-    metodo_pago: esTarjeta ? 'tarjeta' : 'efectivo',
-    tarjeta: esTarjeta ? metodo : '',
+    monto: montoFinal,
+    metodo_pago: metodoPago,
+    tarjeta: tarjetaNombre,
     compra_relacionada_id: '',
     num_msi: msiMeses || '',
     mensualidad: msiMeses > 0 ? Math.round((monto / msiMeses) * 100) / 100 : '',
@@ -809,8 +887,8 @@ async function guardarMovimiento() {
     msi_restantes: msiMeses > 0 ? msiMeses : '',
     fecha_inicio: msiMeses > 0 ? new Date().toISOString().slice(0, 10) : '',
     fecha_fin: '',
-    cuenta: (tipo === 'ingreso' || tipo === 'apartado') ? cuenta : '',
-    apartado: (tipo === 'apartado') ? apartado : '',
+    cuenta: registroCuenta,
+    apartado: registroApartado,
   };
 
   await Sync.crearMovimiento(registro);
