@@ -88,6 +88,11 @@
       <select id="f-metodo"></select>
     </div>
 
+    <div class="field" id="field-tarjeta-pago" style="display:none;">
+      <label for="f-tarjeta-pago">¿Qué tarjeta estás pagando?</label>
+      <select id="f-tarjeta-pago"></select>
+    </div>
+
     <div class="field" id="field-cuenta" style="display:none;">
       <label for="f-cuenta">Cuenta</label>
       <select id="f-cuenta"></select>
@@ -117,6 +122,13 @@
         <option value="18">18 meses</option>
         <option value="24">24 meses</option>
       </select>
+    </div>
+
+    <div class="field" id="field-msi-detalle" style="display:none;">
+      <label for="f-msi-fecha">Fecha en que hiciste la compra</label>
+      <input type="date" id="f-msi-fecha" />
+      <label for="f-msi-pagados" style="margin-top:8px;">Meses que ya llevas pagados</label>
+      <input type="number" inputmode="numeric" id="f-msi-pagados" min="0" value="0" />
     </div>
 
     <button id="btn-guardar" class="btn-primary">Guardar</button>
